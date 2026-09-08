@@ -1,0 +1,46 @@
+# Node / pnpm
+node_modules/
+.pnpm-store/
+*.log
+
+# Nuxt / Nitro / Vite
+.nuxt/
+.output/
+.nitro/
+.cache/
+dist/
+.data/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# TLS material (Nuxt dev dùng self-signed tự sinh; đây là chặn lỡ tay commit key)
+certs/
+*.pem
+*.key
+*.crt
+*.pfx
+
+# Python (arms)
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
+# Arm runtimes (binaries tải/build riêng từng arm)
+arms/*/bin/
+arms/*/build/
+
+# Runtime storage: models, outputs, db, cache
+storage/
+!storage/.gitkeep
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.idea/
+*.swp
