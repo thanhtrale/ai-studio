@@ -1,5 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export interface LaunchRecord {
   armId: string;
@@ -18,6 +20,7 @@ export const REGISTRY_FILENAME = 'launches.json';
 export class LaunchRegistry {
   readonly #file: string;
   #records: LaunchRecord[] = [];
+  #writing: Promise<void> = Promise.resolve();
 
   constructor(stateDir: string) {
     this.#file = path.join(stateDir, REGISTRY_FILENAME);
@@ -59,10 +62,37 @@ export class LaunchRegistry {
   }
 
   async #flush(): Promise<void> {
-    await mkdir(path.dirname(this.#file), { recursive: true });
-    const temporary = `${this.#file}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(this.#records, null, 2)}\n`, 'utf8');
-    await rename(temporary, this.#file);
+    // Serialised, and with a unique temp name per write: two overlapping
+    // flushes would otherwise rename the same temp file and one would fail.
+    this.#writing = this.#writing.then(async () => {
+      const snapshot = [...this.#records];
+      await mkdir(path.dirname(this.#file), { recursive: true });
+      const temporary = `${this.#file}.${randomUUID()}.tmp`;
+      await writeFile(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+      await replaceWithRetry(temporary, this.#file);
+    });
+    await this.#writing;
+  }
+}
+
+/**
+ * Windows can transiently refuse a replace while another handle is open, so a
+ * short retry keeps a routine state write from taking the supervisor down.
+ */
+async function replaceWithRetry(temporary: string, destination: string, attempts = 5): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await rename(temporary, destination);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === attempts || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) {
+        await rm(temporary, { force: true });
+        if (code === 'ENOENT') return;
+        throw error;
+      }
+      await delay(20 * attempt);
+    }
   }
 }
 

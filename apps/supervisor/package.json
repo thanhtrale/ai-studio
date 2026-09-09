@@ -11,5 +11,9 @@
   },
   "dependencies": {
     "@ai-studio/arm-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13",
+    "vitest": "^5.0.0"
   }
 }

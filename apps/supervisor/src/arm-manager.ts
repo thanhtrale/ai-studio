@@ -431,6 +431,11 @@ export class ArmManager {
       if (!(await this.#awaitExit(runtime, this.#config.stopGraceMs))) {
         await this.#deps.terminateTree(pid, 'force');
         if (!(await this.#awaitExit(runtime, this.#config.stopGraceMs))) {
+          // The process is still alive and still holding its GPU memory, so the
+          // arm must keep occupying the slot rather than look stopped.
+          runtime.state = 'running';
+          runtime.detail = `process ${pid} survived a forced termination`;
+          runtime.updatedAt = this.#deps.now();
           throw new Error(`process ${pid} survived a forced termination`);
         }
       }
