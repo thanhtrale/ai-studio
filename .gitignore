@@ -35,9 +35,11 @@ __pycache__/
 arms/*/bin/
 arms/*/build/
 
-# Runtime storage: models, outputs, db, cache
-storage/
-!storage/.gitkeep
+# Runtime storage: models, outputs, db, cache.
+# Keep the directory skeleton, ignore everything actually stored in it.
+storage/**/*
+!storage/**/
+!storage/**/.gitkeep
 
 # OS / editor
 Thumbs.db

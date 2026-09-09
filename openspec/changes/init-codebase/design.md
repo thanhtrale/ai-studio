@@ -153,6 +153,12 @@ The web app can cause processes to start, so the rules are structural rather tha
 
 Stopping an arm means `SIGTERM` (or the Windows equivalent), then a forced kill after a grace period. The forced path must terminate the whole process tree - a Python arm's dataloader workers or a ComfyUI subprocess will otherwise survive and keep the VRAM allocation alive, which defeats the entire point of the stop operation. On Windows this uses a Job Object with kill-on-close, falling back to `taskkill /T /F`.
 
+### 7. Pinned toolchain
+
+Node 24.20.0 (the version installed on the development machine), pnpm 12, Nuxt 4, Tailwind 4. Pinned via `engines`, `packageManager`, and `.nvmrc` so that a second machine cannot silently resolve something else.
+
+Tailwind 4 is wired through `@tailwindcss/vite` with `@import "tailwindcss"` in a CSS entry point, not through the `@nuxtjs/tailwindcss` module and with no `tailwind.config.js`. Tailwind 4 moved configuration into CSS and dropped the JS config file; the Nuxt module targets the v3 shape, so using it would reintroduce the very file v4 removed. Recording this because scaffolding tools still default to the v3 arrangement.
+
 ## Risks / Trade-offs
 
 - **Thrashing when alternating between chat and image generation.** Every switch pays a full model load. → Accepted for this change; the evictor interface from decision 4 is the seam where an idle TTL, a pinned arm, or a VRAM budget can be added without touching callers.

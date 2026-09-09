@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Diffusers arm parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model", "prompt", "outPath"],
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Diffusers pipeline directory, relative to the managed storage directory."
+    },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "negativePrompt": { "type": "string", "maxLength": 8000, "default": "" },
+    "outPath": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Destination image, relative to the managed storage directory."
+    },
+    "steps": { "type": "integer", "minimum": 1, "maximum": 150, "default": 28 },
+    "guidanceScale": { "type": "number", "minimum": 0, "maximum": 30, "default": 5 },
+    "seed": { "type": "integer", "minimum": -1, "default": -1 },
+    "width": { "type": "integer", "minimum": 64, "maximum": 2048, "multipleOf": 8, "default": 1024 },
+    "height": { "type": "integer", "minimum": 64, "maximum": 2048, "multipleOf": 8, "default": 1024 }
+  }
+}

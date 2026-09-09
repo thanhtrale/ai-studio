@@ -1,0 +1,33 @@
+id: text-llamacpp-cu124
+name: llama.cpp server (CUDA 12.4)
+modality: text
+protocol: openai
+lifecycle: resident
+
+resources:
+  gpu: exclusive
+  vramEstimateMb: 8000
+
+launch:
+  # Relative to this arm's directory. Keeping the working directory inside bin/
+  # is what makes the bundled CUDA runtime DLLs resolve ahead of any other copy.
+  cwd: ./bin
+  command: ./llama-server.exe
+  args:
+    - "-m"
+    - "{{model}}"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--n-gpu-layers"
+    - "{{gpuLayers}}"
+    - "--ctx-size"
+    - "{{contextSize}}"
+
+health:
+  type: http
+  path: /health
+  timeoutMs: 120000
+
+params: ./params.schema.json

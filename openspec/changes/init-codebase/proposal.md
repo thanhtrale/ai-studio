@@ -34,7 +34,7 @@ None. This is the first change in the repository.
 
 ## Impact
 
-- **New tooling**: pnpm workspaces, TypeScript project references, Vitest, ESLint. Node 22+.
+- **New tooling**: pnpm workspaces, TypeScript project references, Vitest, ESLint. Node 24.20.0, pnpm 12.
 - **New runtime dependency**: the supervisor is a second long-running process during development; `pnpm dev` must start both it and Nuxt.
 - **Security surface introduced**: the web app can cause arbitrary local processes to be spawned. Launch commands are read only from `arm.yaml` files on disk, are never constructed from user input, and are executed without a shell. Arms bind to loopback only.
 - **Platform**: primary development target is Windows with NVIDIA GPUs; process termination must kill the whole process tree or VRAM is not reclaimed.

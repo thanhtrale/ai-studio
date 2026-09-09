@@ -1,24 +1,24 @@
 ## 1. Repository and tooling foundation
 
-- [ ] 1.1 Add root `package.json` and `pnpm-workspace.yaml` declaring `apps/*`, `packages/*` as workspaces, and verify `pnpm install` completes and `pnpm -r list` shows the expected packages
-- [ ] 1.2 Add shared TypeScript configuration and a base ESLint config consumed by every workspace package, and verify `pnpm -r typecheck` and `pnpm -r lint` run clean on empty packages
-- [ ] 1.3 Add Vitest at the root with a workspace-aware config, and verify `pnpm test` runs and reports zero tests without erroring
-- [ ] 1.4 Create `storage/` with `models/`, `outputs/`, `cache/` and a tracked `.gitkeep`, and verify `git status` reports no untracked files inside `storage/` other than the placeholder
-- [ ] 1.5 Add `.env.example` documenting the supervisor port and shared credential variables, and verify `.env` itself is ignored by `git check-ignore .env`
+- [x] 1.1 Add root `package.json` and `pnpm-workspace.yaml` declaring `apps/*`, `packages/*` as workspaces, pinning Node 24.20.0 and pnpm 12 via `engines`, `packageManager`, and `.nvmrc`, and verify `pnpm install` completes and `pnpm -r list` shows the expected packages
+- [x] 1.2 Add shared TypeScript configuration and a base ESLint config consumed by every workspace package, and verify `pnpm -r typecheck` and `pnpm -r lint` run clean on empty packages
+- [x] 1.3 Add Vitest at the root with a workspace-aware config, and verify `pnpm test` runs and reports zero tests without erroring
+- [x] 1.4 Create `storage/` with `models/`, `outputs/`, `cache/` and a tracked `.gitkeep`, and verify `git status` reports no untracked files inside `storage/` other than the placeholder
+- [x] 1.5 Add `.env.example` documenting the supervisor port and shared credential variables, and verify `.env` itself is ignored by `git check-ignore .env`
 
 ## 2. Arm contract package
 
-- [ ] 2.1 Create `packages/arm-contract` exporting a Zod schema for the arm manifest covering `id`, `modality`, `protocol`, `lifecycle`, `resources`, `launch`, `health`, `params`, and verify unit tests accept the two example manifests from design.md
-- [ ] 2.2 Add schema rules that reject unsupported `protocol` values and require a health declaration and a port placeholder for `resident` arms while allowing their absence for `oneshot`, and verify unit tests cover both directions (spec: arm-package - Arms declare a lifecycle mode, Arms declare a wire protocol)
+- [x] 2.1 Create `packages/arm-contract` exporting a Zod schema for the arm manifest covering `id`, `modality`, `protocol`, `lifecycle`, `resources`, `launch`, `health`, `params`, and verify unit tests accept the two example manifests from design.md
+- [x] 2.2 Add schema rules that reject unsupported `protocol` values and require a health declaration and a port placeholder for `resident` arms while allowing their absence for `oneshot`, and verify unit tests cover both directions (spec: arm-package - Arms declare a lifecycle mode, Arms declare a wire protocol)
 - [ ] 2.3 Export inferred TypeScript types plus the control-API request and response types shared by supervisor and web, and verify both packages compile against them
-- [ ] 2.4 Implement a placeholder-substitution helper that validates values against the arm's parameter schema, substitutes only into individual argv elements, and rejects path values resolving outside `storage/`, and verify unit tests cover traversal attempts and shell-metacharacter values (spec: arm-supervisor - Launch commands cannot be supplied by callers)
+- [x] 2.4 Implement a placeholder-substitution helper that validates values against the arm's parameter schema, substitutes only into individual argv elements, and rejects path values resolving outside `storage/`, and verify unit tests cover traversal attempts and shell-metacharacter values (spec: arm-supervisor - Launch commands cannot be supplied by callers)
 
 ## 3. Arm package scaffolds
 
-- [ ] 3.1 Create `arms/text-llamacpp-cu124/` with `arm.yaml` (resident, `openai`) and `params.schema.json`, plus a README stating which binary release to place in `bin/`, and verify the manifest passes contract validation
-- [ ] 3.2 Create `arms/image-sdcpp-v03-cu121/` with `arm.yaml` (oneshot, `cli`) and `params.schema.json`, and verify the manifest passes contract validation
-- [ ] 3.3 Create `arms/image-diffusers/` with `arm.yaml` (resident, `native`), `params.schema.json`, `pyproject.toml`, and a `src/` entry point stub that only serves a health endpoint, and verify the manifest passes contract validation
-- [ ] 3.4 Confirm `arms/*/bin/`, `arms/*/build/`, and `arms/*/.venv/` are excluded from version control, and verify with `git check-ignore` against a path in each (spec: arm-package - Arm environments are mutually isolated)
+- [x] 3.1 Create `arms/text-llamacpp-cu124/` with `arm.yaml` (resident, `openai`) and `params.schema.json`, plus a README stating which binary release to place in `bin/`, and verify the manifest passes contract validation
+- [x] 3.2 Create `arms/image-sdcpp-v03-cu121/` with `arm.yaml` (oneshot, `cli`) and `params.schema.json`, and verify the manifest passes contract validation
+- [x] 3.3 Create `arms/image-diffusers/` with `arm.yaml` (resident, `native`), `params.schema.json`, `pyproject.toml`, and a `src/` entry point stub that only serves a health endpoint, and verify the manifest passes contract validation
+- [x] 3.4 Confirm `arms/*/bin/`, `arms/*/build/`, and `arms/*/.venv/` are excluded from version control, and verify with `git check-ignore` against a path in each (spec: arm-package - Arm environments are mutually isolated)
 
 ## 4. Supervisor: discovery and control interface
 
@@ -47,7 +47,7 @@
 
 ## 7. Web console
 
-- [ ] 7.1 Create `apps/web` as a Nuxt application with Tailwind configured and the dev server set to self-signed HTTPS, and verify `pnpm dev:web` serves an `https://` origin from a clean checkout with no certificate files present (spec: web-console - The development server is served over HTTPS)
+- [ ] 7.1 Create `apps/web` as a Nuxt 4 application with Tailwind 4 wired via `@tailwindcss/vite` and a CSS entry point (no `tailwind.config.js`, no `@nuxtjs/tailwindcss`) and the dev server set to self-signed HTTPS, and verify `pnpm dev:web` serves an `https://` origin from a clean checkout with no certificate files present (spec: web-console - The development server is served over HTTPS)
 - [ ] 7.2 Implement a server-side supervisor client that reads the supervisor address and credential from the environment, and verify the credential is never included in any payload reaching the browser
 - [ ] 7.3 Implement server routes relaying inventory, start, and stop to the supervisor, mapping failures so that "arm not running", "arm error", and "supervisor unreachable" are distinguishable, and verify tests assert each mapping (spec: web-console - All arm traffic is relayed by the application server)
 - [ ] 7.4 Build the arm inventory view listing identifier, modality, and state, rendering invalid arms with their error and no start control, and verify it renders against a stubbed inventory covering valid, running, failed, and invalid arms (spec: web-console - The application presents the arm inventory)

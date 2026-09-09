@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "llama.cpp server parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model"],
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "GGUF weights, relative to the managed storage directory."
+    },
+    "gpuLayers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999,
+      "default": 999,
+      "description": "Layers offloaded to the GPU. 0 runs on CPU only."
+    },
+    "contextSize": {
+      "type": "integer",
+      "minimum": 512,
+      "maximum": 131072,
+      "default": 8192
+    }
+  }
+}
