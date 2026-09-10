@@ -59,6 +59,7 @@ arms/
   text-llamacpp-cu124/     arm.yaml  params.schema.json  bin/     <- you place binaries here
   image-sdcpp-v03-cu121/   arm.yaml  params.schema.json  bin/
   image-diffusers/         arm.yaml  params.schema.json  .venv/   <- its own interpreter
+  video-ltx25-diffusers/   arm.yaml  params.schema.json  .venv/
 ```
 
 `bin/`, `build/` and `.venv/` are git-ignored. Each arm's README says which release to download. Two arms may wrap the same runtime at different versions built against different CUDA toolkits — they resolve their libraries from their own directory and do not interfere.
@@ -90,6 +91,13 @@ The boundaries that are enforced:
 - Processes are spawned with an argv array and no shell, so a parameter containing shell metacharacters is just a string.
 - Parameters are validated against the arm's JSON Schema, and path parameters must resolve inside `storage/`.
 - The supervisor binds loopback only and requires a bearer credential. Arm ports are never sent to the browser.
+
+## Docs
+
+- [docs/hardware-baseline.md](docs/hardware-baseline.md) — measured ceilings of this machine: compute, PCIe, VRAM, storage.
+- [docs/stack-selection.md](docs/stack-selection.md) — how those numbers pick a runtime and precision for an arm, worked through for LTX-2.5.
+
+`scripts/probe-hardware.py` produces the baseline. Re-run it when the machine changes.
 
 ## Checks
 

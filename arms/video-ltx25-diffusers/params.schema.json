@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LTX-2.5 arm start parameters",
+  "description": "Start-time configuration only. These values are substituted into the launch command, so they decide how weights are loaded and cannot change without a restart. Per-generation values (prompt, size, seed) are sent to the running arm as a job and are validated by the arm itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/ltx-2.5-distilled",
+      "description": "Diffusers pipeline directory, relative to the managed storage directory."
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "outputs",
+      "description": "Root for generated files, relative to the managed storage directory. Every job output path is resolved inside it and anything that escapes is rejected by the arm."
+    },
+    "precision": {
+      "type": "string",
+      "enum": [
+        "bf16",
+        "fp8",
+        "int8"
+      ],
+      "default": "bf16",
+      "description": "Weight precision. bf16 is both the quality reference and, on this machine, the fastest: 4.24 s/step against 11.5 s/step for a Q6_K GGUF transformer, because GGUF has no fused kernel here and dequantizes every weight in torch on each call, which costs more than the PCIe bytes it saves. At bf16 the transformerGguf and textEncoderDir paths below are ignored."
+    },
+    "offload": {
+      "type": "string",
+      "enum": [
+        "group-disk",
+        "group-stream",
+        "group",
+        "model",
+        "sequential",
+        "none"
+      ],
+      "default": "group-stream",
+      "description": "How weights reach the GPU, measured at 960x544x121 with a bf16 transformer. group-stream overlaps each block's transfer with the previous block's compute and costs 4.24 s/step, against a 3.54 s/step pure-compute floor -- it hides 90% of the transfer. group-disk streams the same weights from NVMe instead of host RAM and costs 32.1 s/step, which is already 63% of the drive's real cold read rate, so there is nothing to tune there: the fix is to not read from disk. none requires the whole pipeline to fit in VRAM and will otherwise be silently backed by system RAM by the Windows driver."
+    },
+    "blocksPerGroup": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 1,
+      "description": "Transformer blocks moved as one unit under group offload. Measured at 960x544x121, bigger groups are strictly worse: 1 -> 10.64 s/step, 2 -> 11.78, 4 -> 14.12, 8 -> 131.66 with 0.23 GiB of VRAM spill. Larger groups hold more of the card at once and coarsen the overlap between transfer and compute, and at 8 they push past capacity into the driver's system-RAM fallback. Note that any offload mode using a stream forces this to 1 regardless."
+    },
+    "pinWeights": {
+      "type": "string",
+      "enum": [
+        "false",
+        "true"
+      ],
+      "default": "false",
+      "description": "Pin the offload staging buffer. Worth 1.72x on transfer speed, but diffusers pins by allocating a second copy while the module still holds the first, so host RAM doubles: fp8 needs 57.66 GiB pinned against ~45 GiB usable, and enabling it here filled 63.4 of 63.6 GB before reaching the GPU. Leave off until host RAM grows."
+    },
+    "transformerGguf": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/ltx-2.5-gguf/LTX-2.5-Distilled-Q6_K.gguf",
+      "description": "Pre-quantized transformer, relative to the managed storage directory. Ignored unless precision is fp8 or int8. Q6_K is 17.34 GiB against 35.38 GiB at bf16, but measured it is slower, not faster -- see precision."
+    },
+    "textEncoderDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/ltx-2.5-text-encoder-fp8",
+      "description": "Pre-quantized text encoder from quantize_text_encoder.py. Ignored at bf16, where the encoder is instead streamed from disk by accelerate: it cannot be resident at 22.28 GiB, and diffusers' group offloading cannot chunk a transformers model without breaking its tied lm_head."
+    }
+  }
+}

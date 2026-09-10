@@ -19,7 +19,12 @@ const armDirectories = readdirSync(ARMS_DIR, { withFileTypes: true })
 describe('scaffolded arm packages', () => {
   it('discovers every scaffolded arm', () => {
     expect(armDirectories).toEqual(
-      expect.arrayContaining(['text-llamacpp-cu124', 'image-sdcpp-v03-cu121', 'image-diffusers']),
+      expect.arrayContaining([
+        'text-llamacpp-cu124',
+        'image-sdcpp-v03-cu121',
+        'image-diffusers',
+        'video-ltx25-diffusers',
+      ]),
     );
   });
 

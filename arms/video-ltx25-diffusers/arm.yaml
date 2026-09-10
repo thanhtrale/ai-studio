@@ -1,0 +1,61 @@
+id: video-ltx25-diffusers
+name: LTX-2.5 distilled (Diffusers, video + audio)
+modality: video
+protocol: native
+lifecycle: resident
+
+resources:
+  gpu: exclusive
+  # The distilled transformer is 36.3 GiB at bf16 and 18.2 GiB at fp8, so no
+  # configuration of this arm fits the card outright. It streams weights across
+  # PCIe and claims the whole GPU while it does. See docs/stack-selection.md.
+  vramEstimateMb: 15500
+
+launch:
+  cwd: .
+  # Own interpreter, own CUDA libraries. This arm needs torch>=2.9 for fp8 on
+  # Ada and a diffusers built from git for LTX2Pipeline; neither belongs in a
+  # shared environment.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_ltx25"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--model"
+    - "{{model}}"
+    - "--precision"
+    - "{{precision}}"
+    - "--offload"
+    - "{{offload}}"
+    - "--blocks-per-group"
+    - "{{blocksPerGroup}}"
+    - "--pin-weights"
+    - "{{pinWeights}}"
+    # Job requests reach this arm directly rather than through the supervisor's
+    # parameter resolver, so the arm needs a root of its own to confine output
+    # paths against. This one placeholder is resolved inside storage/ for it.
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--transformer-gguf"
+    - "{{transformerGguf}}"
+    - "--text-encoder-dir"
+    - "{{textEncoderDir}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    # The blob cache would keep a second copy of every weight file on a machine
+    # that cannot create symlinks, which this one cannot. Weights are fetched
+    # with --local-dir instead; this only silences the advisory.
+    HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+
+health:
+  type: http
+  # The server binds and answers before any weight is read, so this timeout
+  # covers process start only. Loading 66 GiB happens on the first job.
+  path: /healthz
+  timeoutMs: 120000
+
+params: ./params.schema.json
