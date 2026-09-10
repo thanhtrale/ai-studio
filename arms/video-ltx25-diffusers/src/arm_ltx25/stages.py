@@ -252,6 +252,26 @@ def _gemma_embeds(pipe: Any, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
     return embeds.to(CUDA), attention_mask.view(1, -1)
 
 
+def clear_card(pipe: Any) -> None:
+    """Send every placed component back to the host.
+
+    Used before loading something that needs the card to itself. The enhancer is
+    9.51 GiB and the pipeline holds 7.85 GiB between stages, so loading one on top
+    of the other reached 17.17 GiB on a 16 GiB card -- under the watchdog's 2 GiB
+    abort threshold, so it was a silent 1.17 GiB spill rather than a failure.
+
+    Nothing is stranded by this: each stage places what it needs on the way in.
+    """
+    for name in ("text_encoder", "connectors", "duration_head", "vae", "audio_vae", "vocoder"):
+        module = getattr(pipe, name, None)
+        if module is None or not hasattr(module, "to"):
+            continue
+        if getattr(module, "_hf_hook", None) is not None:
+            continue
+        module.to(CPU)
+    release()
+
+
 def enter_denoise(pipe: Any, extra: tuple[str, ...] = ()) -> None:
     """Put the small per-step helpers on the card; the transformer streams itself.
 

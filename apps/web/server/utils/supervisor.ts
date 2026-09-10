@@ -118,6 +118,14 @@ export class SupervisorClient {
     });
   }
 
+  /** Relays a generation request to the arm itself; the job schema is the arm's. */
+  job<T>(armId: string, body: unknown): Promise<T> {
+    return this.#call<T>(`/v1/arms/${encodeURIComponent(armId)}/jobs`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   stop(armId: string): Promise<{ arm: ArmSummary }> {
     return this.#call(`/v1/arms/${encodeURIComponent(armId)}/stop`, { method: 'POST' });
   }

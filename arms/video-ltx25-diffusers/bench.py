@@ -101,7 +101,7 @@ def run_one(args: argparse.Namespace, precision: str, offload: str) -> dict[str,
                 num_frames=args.num_frames,
                 seed=args.seed,
             )
-            report = generate(pipe, job)
+            report = generate(pipe, job, model_dir)
             runs.append(
                 {
                     "seconds_total": report.seconds_total,

@@ -157,7 +157,8 @@ POST /generate
 { "prompt": "...", "outPath": "clip.mp4",
   "negativePrompt": "...", "width": 960, "height": 544,
   "numFrames": 121, "frameRate": 24, "seed": 42,
-  "image": "frame.png" }
+  "image": "frame.png",
+  "enhancePrompt": false, "spatialUpsample": false, "temporalUpsample": false }
 ```
 
 `width` and `height` must be multiples of 32 and `numFrames` must be `8n+1`,
@@ -171,6 +172,43 @@ enforces confinement itself.
 path where it *writes* the other one; sharing one directory would turn the output
 root into an arbitrary read. It must exist and end in `.png`, `.jpg`, `.jpeg` or
 `.webp`.
+
+### Prompt enhancement and the two upsampling rounds
+
+All three come from `Lightricks/LTX-2.5-Diffusers` itself rather than from a
+substitute, and each is loaded for the jobs that ask and freed again.
+
+`enhancePrompt` runs the repository's own `prompt_enhancer/` -- a 9.51 GiB Gemma
+-- over the request, with the LTX-2.5 system prompts diffusers ships, and passes
+an image job its conditioning frame so the caption starts from what it will
+actually see. It is run before the encode stage rather than through the
+pipeline's own `enable_prompt_enhancement`, which never fires here because the
+arm supplies `prompt_embeds` and the pipeline therefore skips its own encoding.
+
+It needs the card to itself. Loading it while the pipeline held its usual 7.85
+GiB reached a 17.17 GiB peak on a 16 GiB card -- a 1.17 GiB spill, under the
+watchdog's 2 GiB abort threshold and so silent. The stage now hands the card back
+first.
+
+`spatialUpsample` is the documented two-stage recipe: the request describes stage
+one, `latent_upsampler/` doubles each edge in latent space, and a three-sigma tail
+runs at the new size. `temporalUpsample` is the same shape of operation in time,
+with `temporal_latent_upsampler/` through the same `LTX2LatentUpsamplePipeline`
+and a four-sigma tail. Both redraw rather than interpolate, which is what the
+second denoising round buys; `width`, `height` and `numFrames` always describe
+stage one, so each upsampler doubles what comes out of it.
+
+Deliberately *not* `LTX2DFRTemporalRefinePipeline`, despite its name and its
+`temporal_latent_upsampler` argument. That pipeline belongs to the
+distilled-frame-rate chain and requires `keyframes_latents` and
+`keyframe_positions` from a previous DFR pass, which a plain `LTX2Pipeline` run
+does not produce.
+
+The temporal round doubles the **frame rate**, not the runtime. The audio forces
+that reading: audio latents are sized from the clip's seconds, so a round that
+stretched the duration would leave them the wrong length, while one that only
+raises the frame rate leaves them exactly right. The output file is written at
+the raised rate.
 
 Both shapes run on one loaded pipeline. `LTX2Pipeline` has no image input, so an
 image job is served by `LTX2ImageToVideoPipeline` built over the same components

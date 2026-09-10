@@ -111,6 +111,35 @@ async function handle(
       return;
     }
 
+    if (action === 'jobs') {
+      const body = await readJsonBody(request);
+      const target = `${manager.endpoint(armId)}/generate`;
+
+      let armResponse: Response;
+      try {
+        armResponse = await fetch(target, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch (error) {
+        throw new ArmControlError('arm_error', `arm "${armId}" did not answer (${(error as Error).message})`);
+      }
+
+      const text = await armResponse.text();
+      const parsed: unknown = text ? JSON.parse(text) : {};
+      if (!armResponse.ok) {
+        const detail = (parsed as { error?: string; message?: string });
+        throw new ArmControlError(
+          armResponse.status === 400 ? 'invalid_request' : 'arm_error',
+          detail.message ?? detail.error ?? `arm responded ${armResponse.status}`,
+        );
+      }
+
+      send(response, 200, parsed);
+      return;
+    }
+
     if (action === 'start') {
       const parsed = startArmRequestSchema.safeParse(await readJsonBody(request));
       if (!parsed.success) {

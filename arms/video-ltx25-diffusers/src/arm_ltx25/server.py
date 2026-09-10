@@ -53,7 +53,7 @@ class ArmState:
                 self._pipe, self._load_report = load_pipeline(self.config)
                 print(f"[{ARM_ID}] loaded in {self._load_report.seconds:.1f}s", flush=True)
 
-            report = generate(self._pipe, job)
+            report = generate(self._pipe, job, self.config.model_dir)
         finally:
             self._gpu.release()
 

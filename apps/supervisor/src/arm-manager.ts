@@ -153,6 +153,23 @@ export class ArmManager {
     await this.#registry.replaceAll(kept);
   }
 
+  /**
+   * Base URL of a running arm's own HTTP server.
+   *
+   * Arms bind loopback only, so the supervisor is the one process that can reach
+   * them. Job requests are relayed rather than validated here: the schema for a
+   * job belongs to the arm, and the supervisor deliberately knows nothing about
+   * modality-specific payloads.
+   */
+  endpoint(id: string): string {
+    const runtime = this.#runtimes.get(id);
+    if (!runtime) throw new ArmControlError('not_found', `unknown arm "${id}"`);
+    if (runtime.state !== 'running' || runtime.port === null) {
+      throw new ArmControlError('arm_not_running', `arm "${id}" is not running`);
+    }
+    return `http://${this.#config.host}:${runtime.port}`;
+  }
+
   inventory(): InventoryResponse {
     const arms: ArmSummary[] = [];
 

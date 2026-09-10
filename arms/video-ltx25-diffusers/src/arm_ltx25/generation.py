@@ -18,9 +18,15 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from PIL import Image
 
 # 8 steps. Imported rather than copied: it belongs to the checkpoint, not to us.
-from diffusers.pipelines.ltx2.utils import DEFAULT_NEGATIVE_PROMPT, DISTILLED_SIGMA_VALUES
+from diffusers.pipelines.ltx2.utils import (
+    DEFAULT_NEGATIVE_PROMPT,
+    DISTILLED_SIGMA_VALUES,
+    STAGE_2_DISTILLED_SIGMA_VALUES,
+    TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES,
+)
 
 MAX_PROMPT_CHARS = 8000
 # The VAE compresses 32x spatially and 8x temporally, so dimensions that are not
@@ -66,6 +72,13 @@ class Job:
     # the first denoising step, which is why the VAE has to be on the card from
     # the start rather than only for decode.
     image_path: Path | None = None
+    # Lightricks' own prompt enhancer, a Gemma that rewrites a short request into
+    # the long audio-visual caption style the model was trained on.
+    enhance_prompt: bool = False
+    # Two-stage distilled generation: width/height/num_frames describe stage one,
+    # and each upsampler doubles what comes out of it.
+    spatial_upsample: bool = False
+    temporal_upsample: bool = False
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     width: int = 960
     height: int = 544
@@ -144,11 +157,17 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
 
     seed = _require_int(body, "seed", -1, -1, 2**31 - 1)
     image_path = _resolve_image(body, in_dir)
+    enhance = _require_bool(body, "enhancePrompt")
+    spatial = _require_bool(body, "spatialUpsample")
+    temporal = _require_bool(body, "temporalUpsample")
 
     return Job(
         prompt=prompt,
         out_path=resolved,
         image_path=image_path,
+        enhance_prompt=enhance,
+        spatial_upsample=spatial,
+        temporal_upsample=temporal,
         negative_prompt=negative,
         width=width,
         height=height,
@@ -159,6 +178,13 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _require_bool(body: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = body.get(key, default)
+    if not isinstance(value, bool):
+        raise JobError(f"{key} must be true or false")
+    return value
 
 
 def _resolve_image(body: dict[str, Any], in_dir: Path) -> Path | None:
@@ -274,7 +300,7 @@ def _release_connectors_after_use(pipe: Any) -> Any:
     return pipe.connectors.register_forward_hook(hook)
 
 
-def generate(pipe: Any, job: Job) -> GenerationReport:
+def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
     """Encode, denoise and decode as three stages, releasing the card between them.
 
     Peak VRAM is then the largest single stage rather than the sum of all three,
@@ -310,10 +336,30 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
         return kwargs
 
     started = time.perf_counter()
+    # Doubled by the temporal round, which adds frames without adding runtime.
+    output_frame_rate = job.frame_rate
 
     with SpillWatchdog():
+        prompt = job.prompt
+        if job.enhance_prompt:
+            # Lightricks' own enhancer, with the system prompts diffusers ships
+            # for LTX-2.5. Run before the encode stage rather than inside
+            # `__call__`: the arm supplies `prompt_embeds`, so the pipeline's own
+            # `enable_prompt_enhancement` would never fire.
+            from .refine import enhanced_prompt
+
+            with stage("enhance", reports):
+                prompt = enhanced_prompt(
+                    pipe,
+                    model_dir,
+                    job.prompt,
+                    image=Image.open(job.image_path).convert("RGB") if job.image_path else None,
+                    seed=seed,
+                )
+            print(f"[ltx25] enhanced prompt: {prompt[:160]}...", flush=True)
+
         # --- stage 1: text -------------------------------------------------
-        embeds = encode(pipe, job.prompt, job.negative_prompt, reports)
+        embeds = encode(pipe, prompt, job.negative_prompt, reports)
 
         # --- stage 2: denoise ----------------------------------------------
         denoise_pipe, image_kwargs = _denoise_pipeline(pipe, job)
@@ -324,12 +370,9 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
         # 4.24 s per step.
         enter_denoise(pipe, extra=("vae",) if job.image_path else ())
         denoise_started = time.perf_counter()
-        with stage("denoise", reports):
-            latents, audio_latents = denoise_pipe(
-                **image_kwargs,
-                width=job.width,
-                height=job.height,
-                num_frames=job.num_frames,
+
+        def denoise(pipeline: Any, **overrides: Any) -> tuple[torch.Tensor, torch.Tensor]:
+            call = dict(
                 frame_rate=job.frame_rate,
                 sigmas=DISTILLED_SIGMA_VALUES,
                 # The distilled model is unguided, and every one of these has to
@@ -353,8 +396,54 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
                 callback_on_step_end=on_step_end,
                 **embeds,
             )
-            latents = latents.detach()
-            audio_latents = audio_latents.detach()
+            call.update(overrides)
+            video_latents, sound_latents = pipeline(**call)
+            return video_latents.detach(), sound_latents.detach()
+
+        with stage("denoise", reports):
+            latents, audio_latents = denoise(
+                denoise_pipe,
+                **image_kwargs,
+                width=job.width,
+                height=job.height,
+                num_frames=job.num_frames,
+            )
+
+            if job.spatial_upsample:
+                # The documented two-stage recipe: half-resolution pass, x2 latent
+                # upsample, then a three-sigma tail at the new size. The tail is
+                # what makes this different from an upscale -- the model redraws
+                # detail rather than interpolating it.
+                from .refine import upsample_spatial
+
+                latents = upsample_spatial(pipe, model_dir, latents)
+                latents, audio_latents = denoise(
+                    pipe,
+                    num_frames=job.num_frames,
+                    sigmas=STAGE_2_DISTILLED_SIGMA_VALUES,
+                    latents=latents,
+                    audio_latents=audio_latents,
+                    noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0],
+                )
+
+            if job.temporal_upsample:
+                from .refine import upsample_temporal
+
+                latents = upsample_temporal(pipe, model_dir, latents)
+                # The latent tensor is [B, C, frames, H, W] with time compressed
+                # by 8, so the new frame count is read back from it rather than
+                # assumed -- the upsampler decides how many frames it produced.
+                frames = (latents.shape[2] - 1) * TEMPORAL_MULTIPLE + 1
+                output_frame_rate = job.frame_rate * frames / job.num_frames
+                latents, audio_latents = denoise(
+                    pipe,
+                    num_frames=frames,
+                    frame_rate=output_frame_rate,
+                    sigmas=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES,
+                    latents=latents,
+                    audio_latents=audio_latents,
+                    noise_scale=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES[0],
+                )
 
         if connector_hook is not None:
             connector_hook.remove()
@@ -375,7 +464,7 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
     job.out_path.parent.mkdir(parents=True, exist_ok=True)
     encode_video(
         video[0],
-        fps=int(round(job.frame_rate)),
+        fps=int(round(output_frame_rate)),
         output_path=str(job.out_path),
         audio=audio[0].float().cpu() if audio is not None else None,
         audio_sample_rate=sample_rate,

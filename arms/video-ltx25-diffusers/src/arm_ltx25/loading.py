@@ -383,10 +383,11 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
         if quantization is not None:
             kwargs["quantization_config"] = quantization
 
-    # The prompt enhancer is a 9.5 GiB Gemma that only rewrites the prompt. It is
-    # optional in the pipeline, so it is declined rather than downloaded.
-    if not (config.model_dir / "prompt_enhancer").is_dir():
-        kwargs["prompt_enhancer"] = None
+    # The prompt enhancer is a 9.51 GiB Gemma that rewrites the prompt and is
+    # wanted by a minority of jobs. Declined here unconditionally and attached by
+    # `refine.enhanced_prompt` for the jobs that ask, so its host RAM is not held
+    # for the ones that do not.
+    kwargs["prompt_enhancer"] = None
     # Declined outright rather than loaded and parked. `_decode` uses `vae` alone,
     # and the diffusion decoder cannot run on this machine regardless: it resolves
     # a NATTEN kernel through `get_kernel("shi-labs/natten")`, a repo that returns
