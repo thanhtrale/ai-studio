@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model", required=True, help="diffusers pipeline directory")
     parser.add_argument("--out-dir", required=True, help="root that every job output path is confined to")
+    parser.add_argument("--input-dir", required=True, help="root that a job's conditioning image is confined to")
     parser.add_argument("--offload-dir", required=True, help="scratch root for offload=group-disk")
     parser.add_argument("--transformer-gguf", default="", help="pre-quantized transformer file, inside storage")
     parser.add_argument("--text-encoder-dir", default="", help="pre-quantized text encoder directory")
@@ -67,8 +68,10 @@ def main() -> None:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    in_dir = Path(args.input_dir)
+    in_dir.mkdir(parents=True, exist_ok=True)
 
-    serve(args.host, args.port, ArmState(config, out_dir))
+    serve(args.host, args.port, ArmState(config, out_dir, in_dir))
 
 
 if __name__ == "__main__":

@@ -112,6 +112,7 @@ how the transformer is placed and that cannot change without reloading it.
 | --- | --- | --- |
 | `model` | `models/ltx-2.5-distilled` | pipeline directory, inside `storage/` |
 | `outputDir` | `outputs` | root that every job output path is confined to |
+| `inputDir` | `inputs` | root that a job's conditioning image is confined to |
 | `precision` | `bf16` | `bf16` \| `fp8` \| `int8` — bf16 is both the reference and the fastest here |
 | `offload` | `group-stream` | `group-stream` \| `group` \| `model` \| `sequential` \| `none` |
 | `blocksPerGroup` | `1` | transformer blocks moved as one unit; larger is strictly slower |
@@ -155,7 +156,8 @@ shaped to be easy to retire.
 POST /generate
 { "prompt": "...", "outPath": "clip.mp4",
   "negativePrompt": "...", "width": 960, "height": 544,
-  "numFrames": 121, "frameRate": 24, "seed": 42 }
+  "numFrames": 121, "frameRate": 24, "seed": 42,
+  "image": "frame.png" }
 ```
 
 `width` and `height` must be multiples of 32 and `numFrames` must be `8n+1`,
@@ -163,6 +165,36 @@ matching the VAE's compression; the pipeline would otherwise round them silently
 `outPath` is resolved inside `outputDir` and anything escaping it is rejected —
 job requests do not pass through the supervisor's parameter resolver, so the arm
 enforces confinement itself.
+
+`image` is optional and switches the job to image-to-video. It is resolved inside
+`inputDir`, which is a separate root from `outputDir` because the arm *reads* this
+path where it *writes* the other one; sharing one directory would turn the output
+root into an arbitrary read. It must exist and end in `.png`, `.jpg`, `.jpeg` or
+`.webp`.
+
+Both shapes run on one loaded pipeline. `LTX2Pipeline` has no image input, so an
+image job is served by `LTX2ImageToVideoPipeline` built over the same components
+— no second copy of any weight, and the transformer keeps the group-offload hooks
+already attached to it. It is built from `pipe.components` rather than with
+`from_pipe`, which re-applies a dtype to everything it takes and leaves the
+connectors in float32 against bf16 activations.
+
+Image conditioning costs about 4% per step — 4.41 s against 4.23 s at
+960x544x121 — and peaks *lower* than text-to-video, 12.91 GiB against 13.09.
+
+That is only true because the connectors are released mid-call. They run once,
+before the denoising loop, and would otherwise hold 5.91 GiB for the whole of it.
+Image conditioning needs roughly 3 GiB more than text-to-video, which without
+that release took peak VRAM to 15.57 GiB of 16 and the step to 8.5 s; a job
+following another in the same process reached 15.88 GiB and 19.0 s.
+
+**Nothing raised in either case.** `memory_reserved()` stayed under the card's
+capacity, so the spill watchdog saw nothing while the driver was already evicting
+behind it. The watchdog catches allocation past the card; it does not catch
+running so close to the card that the driver starts making room. Treat a peak
+above roughly 15 GiB as a failure even when it completes, and read step time as
+the real indicator: it is flat to two decimal places when the card is not under
+pressure, and roughly doubles when it is.
 
 `GET /healthz` answers as soon as the process is up. `GET /stats` reports the load
 report, a VRAM snapshot and host RSS.

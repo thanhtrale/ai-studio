@@ -252,9 +252,17 @@ def _gemma_embeds(pipe: Any, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
     return embeds.to(CUDA), attention_mask.view(1, -1)
 
 
-def enter_denoise(pipe: Any) -> None:
-    """Put the small per-step helpers on the card; the transformer streams itself."""
-    place(pipe, STAGE_MODULES["denoise"], CUDA)
+def enter_denoise(pipe: Any, extra: tuple[str, ...] = ()) -> None:
+    """Put the small per-step helpers on the card; the transformer streams itself.
+
+    `extra` names components a particular job needs resident for the whole stage
+    -- image conditioning needs the VAE, which the plan otherwise brings up only
+    for decode.
+    """
+    # `connectors` is placed every time rather than once at load, because an
+    # image job releases it mid-call (see `_release_connectors_after_use`) and
+    # the next job has to find it back on the card.
+    place(pipe, STAGE_MODULES["denoise"] + ("connectors",) + extra, CUDA)
     snapshot("before denoise")
     print(f"[ltx25] on card: {on_card(pipe)}", flush=True)
 

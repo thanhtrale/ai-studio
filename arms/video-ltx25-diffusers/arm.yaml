@@ -39,6 +39,8 @@ launch:
     # paths against. This one placeholder is resolved inside storage/ for it.
     - "--out-dir"
     - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
     - "--transformer-gguf"
     - "{{transformerGguf}}"
     - "--text-encoder-dir"

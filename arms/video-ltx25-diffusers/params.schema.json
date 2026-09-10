@@ -17,6 +17,12 @@
       "default": "outputs",
       "description": "Root for generated files, relative to the managed storage directory. Every job output path is resolved inside it and anything that escapes is rejected by the arm."
     },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "inputs",
+      "description": "Root that a job's conditioning image is resolved inside, relative to the managed storage directory. Separate from outputDir because a job supplies this path and the arm reads it; anything resolving outside is rejected."
+    },
     "precision": {
       "type": "string",
       "enum": [

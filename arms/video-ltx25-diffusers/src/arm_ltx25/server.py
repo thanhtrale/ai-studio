@@ -24,9 +24,10 @@ MAX_BODY_BYTES = 64 * 1024
 class ArmState:
     """Owns the pipeline and serialises access to the GPU."""
 
-    def __init__(self, config: LoadConfig, out_dir: Any) -> None:
+    def __init__(self, config: LoadConfig, out_dir: Any, in_dir: Any) -> None:
         self.config = config
         self.out_dir = out_dir
+        self.in_dir = in_dir
         self._pipe: Any | None = None
         self._load_report: Any | None = None
         # One generation at a time. A second concurrent run would double peak
@@ -42,7 +43,7 @@ class ArmState:
         return asdict(self._load_report) if self._load_report is not None else None
 
     def run(self, body: dict[str, Any]) -> dict[str, Any]:
-        job = parse_job(body, self.out_dir)
+        job = parse_job(body, self.out_dir, self.in_dir)
 
         if not self._gpu.acquire(blocking=False):
             raise Busy("a generation is already running")
@@ -151,7 +152,7 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
 def serve(host: str, port: int, state: ArmState) -> None:
     server = ThreadingHTTPServer((host, port), build_handler(state))
     print(f"[{ARM_ID}] listening on http://{host}:{port}", flush=True)
-    print(f"[{ARM_ID}] model={state.config.model_dir} out={state.out_dir}", flush=True)
+    print(f"[{ARM_ID}] model={state.config.model_dir} out={state.out_dir} in={state.in_dir}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

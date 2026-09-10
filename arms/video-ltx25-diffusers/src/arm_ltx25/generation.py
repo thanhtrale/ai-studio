@@ -62,6 +62,10 @@ class VramSpill(RuntimeError):
 class Job:
     prompt: str
     out_path: Path
+    # Set for image-to-video. The conditioning frame is encoded to latents before
+    # the first denoising step, which is why the VAE has to be on the card from
+    # the start rather than only for decode.
+    image_path: Path | None = None
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
     width: int = 960
     height: int = 544
@@ -94,7 +98,7 @@ def _require_int(body: dict[str, Any], key: str, default: int, low: int, high: i
     return value
 
 
-def parse_job(body: dict[str, Any], out_dir: Path) -> Job:
+def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
     """Validate a job request and confine its output path to `out_dir`.
 
     Confinement is enforced here because job requests do not pass through the
@@ -139,10 +143,12 @@ def parse_job(body: dict[str, Any], out_dir: Path) -> Job:
         raise JobError("frameRate must be between 8 and 60")
 
     seed = _require_int(body, "seed", -1, -1, 2**31 - 1)
+    image_path = _resolve_image(body, in_dir)
 
     return Job(
         prompt=prompt,
         out_path=resolved,
+        image_path=image_path,
         negative_prompt=negative,
         width=width,
         height=height,
@@ -150,6 +156,34 @@ def parse_job(body: dict[str, Any], out_dir: Path) -> Job:
         frame_rate=float(frame_rate),
         seed=seed,
     )
+
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _resolve_image(body: dict[str, Any], in_dir: Path) -> Path | None:
+    """Confine a job's conditioning image to the arm's input directory.
+
+    Same reasoning as `outPath`: job requests do not pass through the
+    supervisor's parameter resolver, so containment is checked here.
+    """
+    raw = body.get("image")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise JobError("image must be a non-empty string when given")
+    if "\x00" in raw:
+        raise JobError("image contains a null byte")
+
+    root = in_dir.resolve()
+    resolved = (root / raw).resolve()
+    if resolved == root or root not in resolved.parents:
+        raise JobError("image resolves outside the arm's input directory")
+    if resolved.suffix.lower() not in IMAGE_SUFFIXES:
+        raise JobError(f"image must be one of {', '.join(IMAGE_SUFFIXES)}")
+    if not resolved.is_file():
+        raise JobError("image does not exist")
+    return resolved
 
 
 class SpillWatchdog:
@@ -191,6 +225,53 @@ class SpillWatchdog:
 
     def __exit__(self, *_: object) -> None:
         self._stop.set()
+
+
+def _denoise_pipeline(pipe: Any, job: Job) -> tuple[Any, dict[str, Any]]:
+    """The entry point for this job, over the weights already loaded.
+
+    `LTX2Pipeline` has no image input; conditioning on a first frame is a
+    different pipeline class over the same components. It is built from
+    `pipe.components` rather than with `from_pipe`, which re-applies a dtype to
+    everything it takes and leaves the connectors in float32 against bf16
+    activations -- surfacing four frames down as "mat1 and mat2 must have the
+    same dtype", nowhere near the cause.
+
+    Sharing components means no second copy of any weight, and the transformer
+    keeps the group-offload hooks already attached to it.
+    """
+    if job.image_path is None:
+        return pipe, {}
+
+    import inspect
+
+    from diffusers import LTX2ImageToVideoPipeline
+    from PIL import Image
+
+    wanted = set(inspect.signature(LTX2ImageToVideoPipeline.__init__).parameters) - {"self"}
+    i2v = LTX2ImageToVideoPipeline(**{k: v for k, v in pipe.components.items() if k in wanted})
+    i2v.set_progress_bar_config(disable=False)
+    return i2v, {"image": Image.open(job.image_path).convert("RGB")}
+
+
+def _release_connectors_after_use(pipe: Any) -> Any:
+    """Send the connectors back to the host the moment they are done.
+
+    They run once per job, before the denoising loop, and then hold 5.91 GiB of
+    the card for the whole of it. Text-to-video can afford that; image
+    conditioning cannot. Its per-token AdaLN modulation costs about 3 GiB more,
+    which takes peak VRAM to 15.6 GiB of 16 -- and measured, a job following
+    another in the same process reached 15.88 GiB and slowed from 8.5 s per step
+    to 19.0 s. Nothing raised: `memory_reserved()` stayed under the card's
+    capacity, so the spill watchdog saw nothing while the driver was already
+    evicting behind it.
+    """
+    from .stages import CPU
+
+    def hook(module: Any, _inputs: Any, _output: Any) -> None:
+        module.to(CPU)
+
+    return pipe.connectors.register_forward_hook(hook)
 
 
 def generate(pipe: Any, job: Job) -> GenerationReport:
@@ -235,10 +316,17 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
         embeds = encode(pipe, job.prompt, job.negative_prompt, reports)
 
         # --- stage 2: denoise ----------------------------------------------
-        enter_denoise(pipe)
+        denoise_pipe, image_kwargs = _denoise_pipeline(pipe, job)
+        connector_hook = _release_connectors_after_use(pipe) if job.image_path else None
+        # Image conditioning encodes its frame to latents before the first step,
+        # so the VAE has to be up front rather than only for decode. Measured, it
+        # costs nothing: text-to-video with the VAE resident runs at the same
+        # 4.24 s per step.
+        enter_denoise(pipe, extra=("vae",) if job.image_path else ())
         denoise_started = time.perf_counter()
         with stage("denoise", reports):
-            latents, audio_latents = pipe(
+            latents, audio_latents = denoise_pipe(
+                **image_kwargs,
                 width=job.width,
                 height=job.height,
                 num_frames=job.num_frames,
@@ -268,6 +356,8 @@ def generate(pipe: Any, job: Job) -> GenerationReport:
             latents = latents.detach()
             audio_latents = audio_latents.detach()
 
+        if connector_hook is not None:
+            connector_hook.remove()
         del embeds
         # Not set to None. Group offloading already returns each block to the
         # host as it finishes, so the transformer holds no block weights here,
