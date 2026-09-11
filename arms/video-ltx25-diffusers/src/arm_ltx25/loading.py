@@ -70,6 +70,9 @@ class LoadConfig:
 
 @dataclasses.dataclass(frozen=True)
 class LoadReport:
+    # Reading and placing the weights. The Python imports that precede it are
+    # `import_seconds`: a fixed cost of the process rather than of the
+    # checkpoint's size, and for a long time an invisible one.
     seconds: float
     precision: str
     offload: str
@@ -78,6 +81,7 @@ class LoadReport:
     vram_reserved_gib: float
     vram_free_gib: float
     host_rss_gib: float
+    import_seconds: float = 0.0
 
 
 def host_rss_gib() -> float:
@@ -347,7 +351,14 @@ def _offload_text_encoder(pipe: Any, offload_dir: Path) -> None:
 
 def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
     """Build an `LTX2Pipeline` for the distilled checkpoint."""
+    # Timed apart from the weights, and deliberately not folded into `seconds`.
+    # The first `import diffusers` in a process pulls torch and transformers in
+    # behind it and costs around 16 s on this machine -- a sixth of a cold job,
+    # and a sixth that has nothing to do with how many bytes the weights are.
+    import_started = time.perf_counter()
     from diffusers import LTX2Pipeline
+
+    import_seconds = time.perf_counter() - import_started
 
     if not config.model_dir.is_dir():
         raise FileNotFoundError(f"model directory does not exist: {config.model_dir}")
@@ -416,6 +427,7 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
     snapshot = vram_snapshot()
     report = LoadReport(
         seconds=time.perf_counter() - started,
+        import_seconds=import_seconds,
         precision=config.precision,
         offload=config.offload,
         pinned=config.pin_weights and config.offload == "group-stream",

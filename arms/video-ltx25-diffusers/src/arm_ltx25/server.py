@@ -65,8 +65,13 @@ class ArmState:
                     "load", "Load model", f"{self.config.precision} · offload {self.config.offload}"
                 ) as reported:
                     self._pipe, self._load_report = load_pipeline(self.config)
+                    # Split, because the two halves have different cures: the
+                    # imports are a fixed process cost, the weights are bytes
+                    # off NVMe at the drive's own rate.
                     reported.detail(
-                        f"{type(self._pipe).__name__} · {self.config.precision}"
+                        f"{type(self._pipe).__name__} · imports "
+                        f"{self._load_report.import_seconds:.1f}s · weights "
+                        f"{self._load_report.seconds:.1f}s · {self.config.precision}"
                         f" · offload {self.config.offload}"
                     )
                 print(f"[{ARM_ID}] loaded in {self._load_report.seconds:.1f}s", flush=True)

@@ -279,6 +279,54 @@ peak host RAM 52.2 GiB of 59.2 available, cold load 30.9 s. Both clips decode to
 121 frames at 960x544, 24 fps, 48 kHz stereo, byte-for-byte identical to each
 other and matching what the same weights produce outside the arm.
 
+Every combination of the three refine features is exercised. The hardest one,
+image-to-video with both upsamplers at 480x256x121, runs in 158 s end to end:
+8 base steps, a x2 spatial round at 960x512, a x2 temporal round to 241 frames
+at 48 fps, peak 12.58 GiB of arm VRAM against 12.87 GiB machine-wide, no spill.
+
+### The connectors have to be re-placed every round
+
+Image conditioning installs a forward hook that sends `connectors` back to the
+host the moment its single forward is done — 5.91 GiB that would otherwise sit
+on the card for the whole denoising loop, which measured took a following job
+from 8.5 s per step to 19.0 s.
+
+But a job with an upsampler runs the loop **more than once**, and the second
+round found those weights on the CPU:
+
+```
+RuntimeError: Expected all tensors to be on the same device, but got mat1 is on
+cuda:0, different from other tensors on cpu (when checking argument in method
+wrapper_CUDA_addmm)
+```
+
+So every round places them back before calling, which is a no-op when they are
+already resident and therefore free for text-to-video. The combination that
+found this — image-to-video *plus* an upsampler — was the one crossing of two
+features that had each been tested alone.
+
+The hook is removed in a `finally`. It is attached to a module that lives as
+long as the arm, so one exception mid-round used to leave every later job,
+including text-to-video jobs that never asked for it, bouncing 5.91 GiB off the
+card each round.
+
+### Where a cold load actually goes
+
+`Load model` is two costs with nothing in common, so the arm reports them apart:
+
+| | cold machine | warm file cache |
+| --- | ---: | ---: |
+| Python imports (`import diffusers` pulls torch and transformers) | 16.6 s | 3.3 s |
+| reading and placing ~66 GiB of weights | 36.2 s | 29.9 s |
+| **total** | **52.9 s** | **33.3 s** |
+
+The weights half is at the drive's floor — 66 GiB at the 1.74 GiB/s measured in
+[hardware-baseline](../../docs/hardware-baseline.md) is 38 s — so there is
+nothing to tune there. The lever is not paying it: the supervisor's broker
+reuses an arm already loaded in the configuration a job needs, measured at 0.0 s
+against 52.9 s for a cold start. It is only paid again when the arm was stopped,
+or when a job asks for start parameters the loaded arm does not have.
+
 ### Every guidance has to be turned off by name
 
 The distilled model is unguided, and `pipe.__call__`'s defaults are the **SFT**

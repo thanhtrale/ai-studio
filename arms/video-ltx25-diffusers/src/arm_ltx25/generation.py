@@ -286,8 +286,9 @@ def _denoise_pipeline(pipe: Any, job: Job) -> tuple[Any, dict[str, Any]]:
 def _release_connectors_after_use(pipe: Any) -> Any:
     """Send the connectors back to the host the moment they are done.
 
-    They run once per job, before the denoising loop, and then hold 5.91 GiB of
-    the card for the whole of it. Text-to-video can afford that; image
+    They run once per *round*, before each denoising loop, and then hold 5.91
+    GiB of the card for the whole of it. `denoise` re-places them at the top of
+    every round precisely because this hook takes them away after each one. Text-to-video can afford that; image
     conditioning cannot. Its per-token AdaLN modulation costs about 3 GiB more,
     which takes peak VRAM to 15.6 GiB of 16 -- and measured, a job following
     another in the same process reached 15.88 GiB and slowed from 8.5 s per step
@@ -314,7 +315,17 @@ def generate(pipe: Any, job: Job, model_dir: Path, progress: Any | None = None) 
 
     from .loading import host_rss_gib
     from .progress import JobProgress
-    from .stages import DECODE_TIMESTEP, StageReport, encode, enter_decode, enter_denoise, release, stage
+    from .stages import (
+        CUDA,
+        DECODE_TIMESTEP,
+        StageReport,
+        encode,
+        enter_decode,
+        enter_denoise,
+        place,
+        release,
+        stage,
+    )
 
     # A caller with no interest in progress -- the benchmark harness -- gets a
     # record that is written and never read, rather than a branch at every step.
@@ -327,6 +338,16 @@ def generate(pipe: Any, job: Job, model_dir: Path, progress: Any | None = None) 
     # up to three -- the base pass and one tail per upsampler -- and they share
     # one callback, so it has to be told which one it is in.
     round_state = {"key": "denoise", "total": len(DISTILLED_SIGMA_VALUES), "index": 0, "last": 0.0}
+
+    def latent_size(current: torch.Tensor) -> str:
+        """The size a round actually runs at, read off the tensor.
+
+        Not `job.width`/`job.height`: those describe stage one, and any round
+        after the spatial upsampler runs at twice them. The latent grid is
+        [B, C, frames, H, W] with space compressed by 32, so this stays right
+        whichever rounds happened to run before it.
+        """
+        return f"{current.shape[4] * SPATIAL_MULTIPLE}×{current.shape[3] * SPATIAL_MULTIPLE}"
 
     def begin_round(key: str, label: str, detail: str, total: int) -> None:
         round_state.update(key=key, total=total, index=0, last=time.perf_counter())
@@ -405,118 +426,134 @@ def generate(pipe: Any, job: Job, model_dir: Path, progress: Any | None = None) 
         # --- stage 2: denoise ----------------------------------------------
         denoise_pipe, image_kwargs = _denoise_pipeline(pipe, job)
         connector_hook = _release_connectors_after_use(pipe) if job.image_path else None
-        # Image conditioning encodes its frame to latents before the first step,
-        # so the VAE has to be up front rather than only for decode. Measured, it
-        # costs nothing: text-to-video with the VAE resident runs at the same
-        # 4.24 s per step.
-        enter_denoise(pipe, extra=("vae",) if job.image_path else ())
-        denoise_started = time.perf_counter()
+        # try/finally, because the hook outlives a failed job otherwise: it is
+        # attached to a module that lives as long as the arm, so one exception
+        # mid-round would leave every later job -- including text-to-video ones
+        # that never asked for it -- bouncing 5.91 GiB off the card each round.
+        try:
+            # Image conditioning encodes its frame to latents before the first step,
+            # so the VAE has to be up front rather than only for decode. Measured, it
+            # costs nothing: text-to-video with the VAE resident runs at the same
+            # 4.24 s per step.
+            enter_denoise(pipe, extra=("vae",) if job.image_path else ())
+            denoise_started = time.perf_counter()
 
-        def denoise(pipeline: Any, **overrides: Any) -> tuple[torch.Tensor, torch.Tensor]:
-            call = dict(
-                frame_rate=job.frame_rate,
-                sigmas=DISTILLED_SIGMA_VALUES,
-                # The distilled model is unguided, and every one of these has to
-                # be said. The pipeline's defaults are the SFT values, so any left
-                # out silently re-enables a guidance the distillation removed:
-                # `modality_scale` defaults to 3.0, and `do_modality_isolation_guidance`
-                # is `modality_scale > 1.0`, which runs a second full transformer
-                # forward per step. Measured, leaving these two out cost 7.93 s per
-                # step against 4.24 s -- and, per the model card, degrades the
-                # result as well, which is the more expensive half.
-                guidance_scale=1.0,
-                audio_guidance_scale=1.0,
-                stg_scale=0.0,
-                audio_stg_scale=0.0,
-                modality_scale=1.0,
-                audio_modality_scale=1.0,
-                decode_timestep=DECODE_TIMESTEP,
-                generator=generator,
-                output_type="latent",
-                return_dict=False,
-                callback_on_step_end=on_step_end,
-                **embeds,
-            )
-            call.update(overrides)
-            video_latents, sound_latents = pipeline(**call)
-            return video_latents.detach(), sound_latents.detach()
+            def denoise(pipeline: Any, **overrides: Any) -> tuple[torch.Tensor, torch.Tensor]:
+                # Brought back every round, not once before the loop. An image job
+                # installs a hook that returns the connectors to the host the moment
+                # their single forward is done, so every round after the first would
+                # otherwise find 5.91 GiB of weights on the CPU and fail with
+                # "mat1 is on cuda:0, other tensors on cpu" -- which is exactly what
+                # image-to-video plus an upsampler did. A no-op when they are already
+                # resident, so text-to-video pays nothing for it.
+                place(pipe, ("connectors",), CUDA)
 
-        with stage("denoise", reports):
-            begin_round(
-                "denoise",
-                "Denoise",
-                f"{len(DISTILLED_SIGMA_VALUES)} steps · {job.width}×{job.height}"
-                f" · {type(denoise_pipe).__name__}",
-                len(DISTILLED_SIGMA_VALUES),
-            )
-            latents, audio_latents = denoise(
-                denoise_pipe,
-                **image_kwargs,
-                width=job.width,
-                height=job.height,
-                num_frames=job.num_frames,
-            )
-            end_round()
+                call = dict(
+                    frame_rate=job.frame_rate,
+                    sigmas=DISTILLED_SIGMA_VALUES,
+                    # The distilled model is unguided, and every one of these has to
+                    # be said. The pipeline's defaults are the SFT values, so any left
+                    # out silently re-enables a guidance the distillation removed:
+                    # `modality_scale` defaults to 3.0, and `do_modality_isolation_guidance`
+                    # is `modality_scale > 1.0`, which runs a second full transformer
+                    # forward per step. Measured, leaving these two out cost 7.93 s per
+                    # step against 4.24 s -- and, per the model card, degrades the
+                    # result as well, which is the more expensive half.
+                    guidance_scale=1.0,
+                    audio_guidance_scale=1.0,
+                    stg_scale=0.0,
+                    audio_stg_scale=0.0,
+                    modality_scale=1.0,
+                    audio_modality_scale=1.0,
+                    decode_timestep=DECODE_TIMESTEP,
+                    generator=generator,
+                    output_type="latent",
+                    return_dict=False,
+                    callback_on_step_end=on_step_end,
+                    **embeds,
+                )
+                call.update(overrides)
+                video_latents, sound_latents = pipeline(**call)
+                return video_latents.detach(), sound_latents.detach()
 
-            if job.spatial_upsample:
-                # The documented two-stage recipe: half-resolution pass, x2 latent
-                # upsample, then a three-sigma tail at the new size. The tail is
-                # what makes this different from an upscale -- the model redraws
-                # detail rather than interpolating it.
-                from .refine import upsample_spatial
-
-                with progress.step(
-                    "spatial", "Spatial ×2", f"{job.width * 2}×{job.height * 2}"
-                ):
-                    latents = upsample_spatial(pipe, model_dir, latents)
+            with stage("denoise", reports):
                 begin_round(
-                    "spatial-refine",
-                    "Spatial refine",
-                    f"{len(STAGE_2_DISTILLED_SIGMA_VALUES)} steps · {job.width * 2}×{job.height * 2}",
-                    len(STAGE_2_DISTILLED_SIGMA_VALUES),
+                    "denoise",
+                    "Denoise",
+                    f"{len(DISTILLED_SIGMA_VALUES)} steps · {job.width}×{job.height}"
+                    f" · {type(denoise_pipe).__name__}",
+                    len(DISTILLED_SIGMA_VALUES),
                 )
                 latents, audio_latents = denoise(
-                    pipe,
+                    denoise_pipe,
+                    **image_kwargs,
+                    width=job.width,
+                    height=job.height,
                     num_frames=job.num_frames,
-                    sigmas=STAGE_2_DISTILLED_SIGMA_VALUES,
-                    latents=latents,
-                    audio_latents=audio_latents,
-                    noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0],
                 )
                 end_round()
 
-            if job.temporal_upsample:
-                from .refine import upsample_temporal
+                if job.spatial_upsample:
+                    # The documented two-stage recipe: half-resolution pass, x2 latent
+                    # upsample, then a three-sigma tail at the new size. The tail is
+                    # what makes this different from an upscale -- the model redraws
+                    # detail rather than interpolating it.
+                    from .refine import upsample_spatial
 
-                with progress.step("temporal", "Temporal ×2") as reported:
-                    latents = upsample_temporal(pipe, model_dir, latents)
-                # The latent tensor is [B, C, frames, H, W] with time compressed
-                # by 8, so the new frame count is read back from it rather than
-                # assumed -- the upsampler decides how many frames it produced.
-                frames = (latents.shape[2] - 1) * TEMPORAL_MULTIPLE + 1
-                output_frame_rate = job.frame_rate * frames / job.num_frames
-                reported.detail(
-                    f"{frames} frames @{output_frame_rate:.0f} fps, same duration"
-                )
-                begin_round(
-                    "temporal-refine",
-                    "Temporal refine",
-                    f"{len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES)} steps · {job.width}×{job.height}",
-                    len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES),
-                )
-                latents, audio_latents = denoise(
-                    pipe,
-                    num_frames=frames,
-                    frame_rate=output_frame_rate,
-                    sigmas=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES,
-                    latents=latents,
-                    audio_latents=audio_latents,
-                    noise_scale=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES[0],
-                )
-                end_round()
+                    with progress.step(
+                        "spatial", "Spatial ×2", f"{job.width * 2}×{job.height * 2}"
+                    ):
+                        latents = upsample_spatial(pipe, model_dir, latents)
+                    begin_round(
+                        "spatial-refine",
+                        "Spatial refine",
+                        f"{len(STAGE_2_DISTILLED_SIGMA_VALUES)} steps · {latent_size(latents)}",
+                        len(STAGE_2_DISTILLED_SIGMA_VALUES),
+                    )
+                    latents, audio_latents = denoise(
+                        pipe,
+                        num_frames=job.num_frames,
+                        sigmas=STAGE_2_DISTILLED_SIGMA_VALUES,
+                        latents=latents,
+                        audio_latents=audio_latents,
+                        noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0],
+                    )
+                    end_round()
 
-        if connector_hook is not None:
-            connector_hook.remove()
+                if job.temporal_upsample:
+                    from .refine import upsample_temporal
+
+                    with progress.step("temporal", "Temporal ×2") as reported:
+                        latents = upsample_temporal(pipe, model_dir, latents)
+                    # The latent tensor is [B, C, frames, H, W] with time compressed
+                    # by 8, so the new frame count is read back from it rather than
+                    # assumed -- the upsampler decides how many frames it produced.
+                    frames = (latents.shape[2] - 1) * TEMPORAL_MULTIPLE + 1
+                    output_frame_rate = job.frame_rate * frames / job.num_frames
+                    reported.detail(
+                        f"{frames} frames @{output_frame_rate:.0f} fps, same duration"
+                    )
+                    begin_round(
+                        "temporal-refine",
+                        "Temporal refine",
+                        f"{len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES)} steps · "
+                        f"{latent_size(latents)} · {frames} frames",
+                        len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES),
+                    )
+                    latents, audio_latents = denoise(
+                        pipe,
+                        num_frames=frames,
+                        frame_rate=output_frame_rate,
+                        sigmas=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES,
+                        latents=latents,
+                        audio_latents=audio_latents,
+                        noise_scale=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES[0],
+                    )
+                    end_round()
+
+        finally:
+            if connector_hook is not None:
+                connector_hook.remove()
         del embeds
         # Not set to None. Group offloading already returns each block to the
         # host as it finishes, so the transformer holds no block weights here,
