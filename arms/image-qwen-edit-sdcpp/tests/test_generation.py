@@ -79,7 +79,8 @@ def test_sizes_must_be_whole_blocks(tmp_path: Path) -> None:
 
 def test_numeric_bounds_are_enforced(tmp_path: Path) -> None:
     out_dir, in_dir = roots(tmp_path)
-    for field, value in [("steps", 0), ("steps", 500), ("batch", 0), ("batch", 99), ("cfgScale", 99)]:
+    # batch 9 is over the child's own max_batch_count of 8.
+    for field, value in [("steps", 0), ("steps", 500), ("batch", 0), ("batch", 9), ("cfgScale", 99)]:
         with pytest.raises(JobError, match=field):
             parse_job({"prompt": "a", "outPath": "a.png", field: value}, out_dir, in_dir)
 
@@ -102,6 +103,26 @@ def test_a_sampler_name_is_a_name(tmp_path: Path) -> None:
     out_dir, in_dir = roots(tmp_path)
     with pytest.raises(JobError, match="sampler"):
         parse_job({"prompt": "a", "outPath": "a.png", "sampler": "euler a; rm -rf"}, out_dir, in_dir)
+
+
+def test_several_references_are_numbered(tmp_path: Path) -> None:
+    out_dir, in_dir = roots(tmp_path)
+    for name in ("a.png", "b.png"):
+        (in_dir / name).write_bytes(b"\x89PNG" + name.encode())
+
+    one = parse_job({"prompt": "p", "outPath": "o.png", "refImages": ["a.png"]}, out_dir, in_dir)
+    # One reference has nothing to number, so the flag would only be noise.
+    assert "increase_ref_index" not in request_body(one)
+
+    two = parse_job(
+        {"prompt": "p", "outPath": "o.png", "refImages": ["a.png", "b.png"]}, out_dir, in_dir
+    )
+    body = request_body(two)
+    assert body["increase_ref_index"] is True
+    assert len(body["ref_images"]) == 2
+    # Order is the input's: a prompt referring to "image 2" means the second
+    # one the console listed.
+    assert body["ref_images"][0] != body["ref_images"][1]
 
 
 def test_batch_names_keep_the_first_image_unsuffixed() -> None:

@@ -22,7 +22,10 @@ export interface Frame {
 }
 
 /** No model here is worth asking for a frame smaller than this. */
-const MIN_EDGE = 256;
+export const MIN_EDGE = 256;
+
+/** Past this the card is the limit, not the model. */
+export const MAX_EDGE = 4096;
 
 const snap = (value: number, multiple: number, min: number): number =>
   Math.max(min, Math.round(value / multiple) * multiple);

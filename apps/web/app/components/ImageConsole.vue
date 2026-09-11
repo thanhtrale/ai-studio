@@ -29,8 +29,9 @@ import {
   ASPECTS,
   aspectRatio,
   IMAGE_MULTIPLE,
+  MAX_EDGE,
+  MIN_EDGE,
   REFERENCE_ASPECT,
-  resolveImageFrame,
   type Aspect,
 } from '../utils/frame';
 import JobTimeline from './JobTimeline.vue';
@@ -58,7 +59,9 @@ const props = defineProps<{
 
 /** Qwen-Image-Edit composes its references rather than choosing between them. */
 const MAX_REFERENCES = 4;
-const BATCH_PRESETS = [1, 2, 4, 8];
+/** `limits.max_batch_count` from the child's capabilities, not a guess. */
+const MAX_BATCH = 8;
+const BATCH_PRESETS = [1, 2, 4, MAX_BATCH];
 
 /**
  * Why a peak might not be this arm's own.
@@ -154,16 +157,15 @@ const flashAttention = ref(true);
 const prompt = ref('');
 const negativePrompt = ref('');
 const aspect = ref<string>('1:1');
-const megapixels = ref(1);
 const width = ref(1024);
 const height = ref(1024);
-// Upstream's own numbers for Qwen-Image-Edit: 20 steps is the child's
-// default, and its documented examples all pass --cfg-scale 2.5 and
-// --flow-shift 3. A distilled "rapid" merge wants 4 steps at CFG 1 instead.
-const steps = ref(20);
-const cfgScale = ref(2.5);
-const sampler = ref('euler');
-const scheduler = ref('');
+// The distilled "rapid" merge that ships with this arm: four steps, unguided.
+// The stock Qwen-Image-Edit 2511 wants 20 steps at CFG 2.5 instead, which is
+// what the hint under Steps says.
+const steps = ref(4);
+const cfgScale = ref(1);
+const sampler = ref('euler_a');
+const scheduler = ref('beta');
 const flowShift = ref(3);
 const seed = ref('');
 const batch = ref(1);
@@ -196,23 +198,55 @@ const aspectOptions = computed(() => [
   ...ASPECTS.map((option) => ({ value: option, label: option })),
 ]);
 
+/** The shape being asked for: a named aspect, or the first reference's own. */
+const ratio = computed(() =>
+  aspect.value === REFERENCE_ASPECT
+    ? (referenceRatio.value?.ratio ?? 1)
+    : aspectRatio(aspect.value as Aspect),
+);
+
+const snap = (value: number): number =>
+  Math.max(MIN_EDGE, Math.min(MAX_EDGE, Math.round(value / IMAGE_MULTIPLE) * IMAGE_MULTIPLE));
+
 /**
- * Aspect and megapixels drive the size, until someone types a size.
+ * The two edges drive each other through the aspect.
  *
- * Synchronous on purpose: restoring a previous run sets the aspect and then the
- * exact width and height it used, and with a deferred watch the derived values
- * would land second and overwrite the real ones.
+ * Which one is authoritative is whichever one was last typed into, so the pair
+ * never argues with the person editing it. Both commit on blur rather than per
+ * keystroke -- see `lazy` on the input -- because `1024` passes through 1 and
+ * 10 on the way, and each of those would drag the other edge somewhere absurd.
+ */
+const widthModel = computed({
+  get: () => width.value,
+  set: (value) => {
+    width.value = snap(value);
+    height.value = snap(width.value / ratio.value);
+  },
+});
+
+const heightModel = computed({
+  get: () => height.value,
+  set: (value) => {
+    height.value = snap(value);
+    width.value = snap(height.value * ratio.value);
+  },
+});
+
+/**
+ * A new aspect moves the height and leaves the width alone.
+ *
+ * Width is the edge people hold fixed -- it is the one a model's training
+ * resolution is usually quoted in -- so the aspect reshapes around it rather
+ * than rescaling both.
+ *
+ * Synchronous, because restoring a previous run sets the aspect and then the
+ * exact size that run used: a deferred watch would land second and overwrite
+ * the real numbers with derived ones.
  */
 watch(
-  [aspect, megapixels, referenceRatio],
+  [aspect, referenceRatio],
   () => {
-    const ratio =
-      aspect.value === REFERENCE_ASPECT
-        ? (referenceRatio.value?.ratio ?? 1)
-        : aspectRatio(aspect.value as Aspect);
-    const frame = resolveImageFrame(ratio, megapixels.value);
-    width.value = frame.width;
-    height.value = frame.height;
+    height.value = snap(width.value / ratio.value);
   },
   { immediate: true, flush: 'sync' },
 );
@@ -223,13 +257,11 @@ watch(referenceRatio, (current) => {
   if (!current && aspect.value === REFERENCE_ASPECT) aspect.value = '1:1';
 });
 
-/** What will actually be asked for, after rounding to the model's block size. */
-const snapped = computed(() => ({
-  width: Math.max(IMAGE_MULTIPLE, Math.round(width.value / IMAGE_MULTIPLE) * IMAGE_MULTIPLE),
-  height: Math.max(IMAGE_MULTIPLE, Math.round(height.value / IMAGE_MULTIPLE) * IMAGE_MULTIPLE),
-}));
+/** Both edges are already on the grid; this is what the arm will be sent. */
+const snapped = computed(() => ({ width: width.value, height: height.value }));
 
-const megapixelsOut = computed(() => (snapped.value.width * snapped.value.height) / 1_000_000);
+const megapixelsOut = computed(() => (width.value * height.value) / 1_000_000);
+const actualRatio = computed(() => width.value / height.value);
 
 function choose(id: string | null): void {
   const slot = picking.value;
@@ -274,7 +306,6 @@ function restoreFrom(meta: MediaMeta): void {
 
   const known = [REFERENCE_ASPECT, ...ASPECTS] as readonly string[];
   if (settings.aspect && known.includes(settings.aspect)) aspect.value = settings.aspect;
-  if (settings.megapixels) megapixels.value = settings.megapixels;
   steps.value = settings.steps;
   cfgScale.value = settings.cfgScale;
   sampler.value = settings.sampler;
@@ -333,7 +364,6 @@ async function generate(): Promise<void> {
   const settings: ImageJobSettings = {
     kind: 'image',
     aspect: aspect.value,
-    megapixels: megapixels.value,
     width: snapped.value.width,
     height: snapped.value.height,
     steps: steps.value,
@@ -394,25 +424,37 @@ async function generate(): Promise<void> {
 
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium text-slate-200">Frame</legend>
-        <div class="grid grid-cols-2 gap-3">
-          <UiField label="Aspect" for="aspect">
-            <UiSelect id="aspect" v-model="aspect" :options="aspectOptions" />
-          </UiField>
-          <UiField label="Megapixels" for="megapixels">
-            <UiNumberInput id="megapixels" v-model="megapixels" :min="0.05" :max="4" :step="0.05" />
-          </UiField>
-        </div>
+        <UiField label="Aspect" for="aspect">
+          <UiSelect id="aspect" v-model="aspect" :options="aspectOptions" />
+        </UiField>
         <div class="grid grid-cols-2 gap-3">
           <UiField label="Width" for="width">
-            <UiNumberInput id="width" v-model="width" :min="256" :max="4096" :step="IMAGE_MULTIPLE" />
+            <UiNumberInput
+              id="width"
+              v-model="widthModel"
+              lazy
+              :min="MIN_EDGE"
+              :max="MAX_EDGE"
+              :step="IMAGE_MULTIPLE"
+            />
           </UiField>
           <UiField label="Height" for="height">
-            <UiNumberInput id="height" v-model="height" :min="256" :max="4096" :step="IMAGE_MULTIPLE" />
+            <UiNumberInput
+              id="height"
+              v-model="heightModel"
+              lazy
+              :min="MIN_EDGE"
+              :max="MAX_EDGE"
+              :step="IMAGE_MULTIPLE"
+            />
           </UiField>
         </div>
         <p class="text-xs text-slate-500">
-          asks for <span class="text-slate-300">{{ snapped.width }}&#215;{{ snapped.height }}</span>
-          &middot; {{ megapixelsOut.toFixed(2) }} MP
+          {{ megapixelsOut.toFixed(2) }} MP &middot; actual ratio {{ actualRatio.toFixed(3) }}
+        </p>
+        <p class="text-xs text-slate-500">
+          Either edge sets the other through the aspect; changing the aspect moves the height. Both land on
+          a multiple of {{ IMAGE_MULTIPLE }}, which is the model's own grid.
         </p>
         <p v-if="aspect === REFERENCE_ASPECT && references[0]" class="text-xs text-slate-500">
           Shaped to {{ references[0].name }} ({{ references[0].width }}&#215;{{ references[0].height }}).
@@ -427,6 +469,10 @@ async function generate(): Promise<void> {
           <UiNumberInput id="cfg" v-model="cfgScale" :min="0" :max="30" :step="0.1" />
         </UiField>
       </div>
+      <p class="-mt-3 text-xs text-slate-500">
+        Four steps at CFG 1 is the distilled Rapid merge: it is trained to finish in that many and is
+        unguided, so the negative prompt does nothing. Stock Qwen-Image-Edit 2511 wants 20 steps at CFG 2.5.
+      </p>
 
       <div class="grid grid-cols-2 gap-3">
         <UiField label="Sampler" for="sampler">
@@ -527,7 +573,7 @@ async function generate(): Promise<void> {
             >
               {{ preset }}
             </UiButton>
-            <div class="w-24"><UiNumberInput v-model="batch" :min="1" :max="16" /></div>
+            <div class="w-24"><UiNumberInput v-model="batch" :min="1" :max="MAX_BATCH" /></div>
           </div>
           <template #hint>
             One load, {{ batch }} image{{ batch === 1 ? '' : 's' }}, each filed separately with its own seed.

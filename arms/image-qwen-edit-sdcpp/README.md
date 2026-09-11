@@ -64,16 +64,21 @@ Four files, under `storage/models/qwen-image-edit-2511/` by default:
 
 | file | size | from | what it is |
 | --- | ---: | --- | --- |
-| `qwen-image-edit-2511-Q4_K_M.gguf` | 13 GB | [unsloth/Qwen-Image-Edit-2511-GGUF] | the transformer |
+| `qwenedit-aio-unet-v23.safetensors` | 20 GB | [deepfree/…-UNetOnly] | **the default transformer**: the Rapid v23 merge, four steps |
+| `qwen-image-edit-2511-Q4_K_M.gguf` | 13 GB | [unsloth/Qwen-Image-Edit-2511-GGUF] | stock 2511, twenty steps |
 | `qwen_image_vae.safetensors` | 243 MB | [Comfy-Org/Qwen-Image_ComfyUI] | the VAE, shared across every Edit release |
 | `qwen_2.5_vl_7b.safetensors` | 16 GB | [Comfy-Org/Qwen-Image_ComfyUI] | the Qwen2.5-VL text encoder, bf16 |
 | `Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf` | — | — | vision tower — **only** for a GGUF encoder |
+
+Both transformers share the VAE and the encoder, so switching between them is a
+change of one start parameter and a restart, not a second install.
 
 Fetched with the `hf` CLI (any Hugging Face client will do; none of these repos
 is gated):
 
 ```powershell
 $dest = "storage/models/qwen-image-edit-2511"
+hf download deepfree/Qwen-Image-Edit-Rapid-AIO-UNetOnly qwenedit-aio-unet-v23.safetensors --local-dir $dest
 hf download unsloth/Qwen-Image-Edit-2511-GGUF qwen-image-edit-2511-Q4_K_M.gguf --local-dir $dest
 hf download Comfy-Org/Qwen-Image_ComfyUI split_files/vae/qwen_image_vae.safetensors --local-dir $dest
 hf download Comfy-Org/Qwen-Image_ComfyUI split_files/text_encoders/qwen_2.5_vl_7b.safetensors --local-dir $dest
@@ -95,10 +100,28 @@ case.
 The quantisation of the transformer is the main VRAM lever. Q8_0 is roughly
 double Q4_K_M and will not sit on a 16 GiB card beside a 7B text encoder.
 
-### Which Edit release
+### Rapid, or stock
+
+The default is the **Rapid v23** merge: Qwen-Image-Edit 2511 with the
+accelerator LoRAs baked in, so it is trained to finish in four unguided steps
+rather than twenty guided ones. That is where the time goes in this arm —
+sampling is 85% of a job — so the difference is not marginal.
+
+| | Rapid v23 | stock 2511 Q4_K_M |
+| --- | --- | --- |
+| steps | 4 | 20 |
+| CFG | 1.0 — unguided, so the negative prompt does nothing | 2.5 |
+| sampler / scheduler | euler_a / beta | euler / model default |
+| file | 20 GB | 13 GB |
+| a 1024×576 edit | 14.2 s | 84.0 s |
+
+The console's defaults are the Rapid ones. Point `diffusionModel` at the GGUF
+and raise steps and CFG to switch; the arm restarts itself because the
+transformer is a start parameter.
 
 `modelArgs` defaults to `qwen_image_zero_cond_t=true`, which upstream requires
-for **2511 specifically**. On 2509 or the original Edit release, clear it.
+for **2511 specifically** — including the Rapid merge, which is 2511-based. On
+2509 or the original Edit release, clear it.
 
 ## What a job looks like
 
@@ -147,6 +170,27 @@ is the same mechanism that makes the video arm's 36 GiB transformer "load" in
 measured here, because a mapped file behaves differently under memory pressure
 than a read one.
 
+### Several references
+
+Up to four. A job with more than one is sent `increase_ref_index` — a real
+top-level parameter of this build, confirmed against its own
+`/sdcpp/v1/capabilities`, where it is listed with a default of `false`. Sent
+only when there is more than one, because a single reference has nothing to
+number.
+
+**Both references demonstrably reach the model.** Given a rainy night window and
+a white sports car, the result was the car in a rainy night setting: one subject
+and one setting, each from a different reference.
+
+**Whether a prompt's "image 1" resolves to the first one listed, I could not
+show.** Asking for "reproduce image 1 exactly" and "reproduce image 2 exactly"
+with the same pair returned the same picture — the car — on the Rapid merge and
+again on stock 2511, so it is not a property of the distillation. It may equally
+be my test: a dark silhouette against a bright studio product shot is not a fair
+contest for the model's attention. Treat reference order as "these images are
+all inputs", and do not rely on numbering them in the prompt until someone
+demonstrates otherwise.
+
 ### Sizes are 16-pixel blocks, not 32
 
 Qwen-Image has an 8× VAE with a 2× patch embed on top, so the grid is 16. The
@@ -156,7 +200,9 @@ difference is 752×1008 against 736×992.
 
 ### The batch
 
-`batch_count` in one request, so one load produces several images. The first
+Up to **8** — `limits.max_batch_count` from the child's own capabilities rather
+than a number chosen here. `batch_count` in one request, so one load produces
+several images. The first
 keeps the name the caller planned and the rest are suffixed (`a.png`,
 `a-2.png`, `a-3.png`), which means a batch of one is indistinguishable from a
 single generation — the library record the caller planned still points at a
@@ -168,21 +214,42 @@ batch it arrived in.
 
 ## Measured
 
-Four jobs on an RTX 4080 (16376 MiB), Q4_K_M transformer, bf16 encoder,
-`--offload-to-cpu`, flash attention on, 20 steps at CFG 2.5, euler, flow-shift 3:
+An RTX 4080 (16376 MiB), bf16 encoder, `--offload-to-cpu`, flash attention on.
+
+**Rapid v23** — 4 steps, CFG 1, euler_a, beta:
+
+| job | total | encode | sample | decode | card peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1024×1024, cold | 38.9 s | 8.1 s | 28.6 s | 1.6 s | 14978 MiB |
+| 1024×576 + 1 reference | **14.2 s** | 2.0 s | 10.1 s | 0.7 s | **15220 MiB** |
+| 1024×576 + 2 references | 20.6 s | 1.7 s | 16.3 s | 0.7 s | 15196 MiB |
+| 768×768 ×4 (one batch) | 24.5 s | 1.1 s | 5.0 s | 2.9 s | 15182 MiB |
+
+**Stock 2511 Q4_K_M** — 20 steps, CFG 2.5, euler:
 
 | job | total | encode | sample | decode | per step | card peak |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1024×1024, cold | 79.1 s | 6.9 s | 70.0 s | 1.6 s | 3.12 s | 13640 MiB |
-| 1024×576 + 1 reference | 84.0 s | 2.7 s | 79.2 s | 0.7 s | 3.89 s | **15256 MiB** |
+| 1024×576 + 1 reference | 84.0 s | 2.7 s | 79.2 s | 0.7 s | 3.89 s | 15256 MiB |
 | 1024×1024 again, warm | 66.9 s | 1.1 s | 63.7 s | 1.3 s | 3.19 s | 13778 MiB |
 | 768×768 ×2 (one batch) | 62.4 s | 1.1 s | 29.7 s | 1.5 s | 1.44 s | 14584 MiB |
 
-Four things worth keeping:
+**The same edit takes 14.2 s on Rapid against 84.0 s on stock — 5.9×.** Not from
+being cheaper per step: the Rapid transformer is 20 GB of fp8 against 13 GB of
+Q4_K_M, so each step moves more across PCIe. It wins by needing four of them
+instead of twenty, which is the whole point of a distilled merge, and it is why
+the console's defaults are its numbers rather than upstream's.
+
+Note the first Rapid job's 28.6 s of sampling against the second's 10.1 s. That
+is not four steps costing 7 s each; it is the first job paying for weights being
+paged in. Steady state is around 2.5 s a step.
+
+Four more things worth keeping:
 
 **The same prompt and seed twice gave byte-identical files.** Both runs of the
-1024×1024 job hashed to `4845bba9…`, so anything that changes an output here is
-a change, not noise — which is the property that makes a regression findable.
+stock 1024×1024 job hashed to `4845bba9…`, so anything that changes an output
+here is a change, not noise — which is the property that makes a regression
+findable.
 
 **The first job costs about twelve seconds more than the same job warm**, spread
 across the prompt encode (6.9 → 1.1 s) and the sampling (70.0 → 63.7 s) rather
@@ -196,10 +263,14 @@ worth measuring rather than assuming.
 per step against 3.12, because the reference's latents join the sequence the
 transformer attends over.
 
-**The edit job reached 93% of the card** — 15256 of 16376 MiB. It did not spill
-(the per-step time stayed level, and Windows would have shown it as a
-collapse rather than an error), but that is the headroom this configuration
-actually has, and it is what `maxVram` is there for.
+**Every configuration tops out around 15200 MiB** — 93% of the card — and the
+edit jobs are what get there. Nothing spilled (the per-step time stayed level,
+and Windows would have shown a spill as a collapse rather than an error), but
+that is the headroom this arm actually has, and it is what `maxVram` is for.
+
+**The batch is where the throughput is.** Four 768×768 images in one job spent
+5.0 s sampling in total; run as four separate jobs they would each have paid the
+prompt encode and the decode again.
 
 ## Where the timeline comes from
 
@@ -297,6 +368,7 @@ be wrong. It is not a substitute for running the real thing: the two bugs that
 mattered most — a zero VRAM reading and an orphaned child — were both invisible
 to it and both obvious within one real run.
 
+[deepfree/…-UNetOnly]: https://huggingface.co/deepfree/Qwen-Image-Edit-Rapid-AIO-UNetOnly
 [unsloth/Qwen-Image-Edit-2511-GGUF]: https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
 [Comfy-Org/Qwen-Image_ComfyUI]: https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI
 

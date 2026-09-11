@@ -6,8 +6,13 @@ import { describeMedia, writeMeta } from '../../../utils/library';
 import { relay } from '../../../utils/relay';
 import { RelayError } from '../../../utils/supervisor';
 
-/** A batch of sixteen 1024px images is already more than a card wants at once. */
-const MAX_BATCH = 16;
+/**
+ * The child's own ceiling: `limits.max_batch_count` from its capabilities.
+ *
+ * Checked here as well as in the arm so a bad request is refused before an arm
+ * is brokered onto the card for it.
+ */
+const MAX_BATCH = 8;
 const MAX_REFERENCES = 4;
 
 export default defineEventHandler(async (event): Promise<ImageGenerateResponse> => {

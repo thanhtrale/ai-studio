@@ -25,7 +25,10 @@ from .runtime import SdServer
 # does not know with a message this arm passes straight back.
 NAME = re.compile(r"^[a-z0-9_+.\-]{1,32}$")
 
-MAX_BATCH = 16
+# The child's own ceiling, read from its `/sdcpp/v1/capabilities`
+# (`limits.max_batch_count`) rather than guessed. Asking for more is refused
+# there; refusing it here means the caller hears why.
+MAX_BATCH = 8
 MAX_REFERENCES = 4
 MAX_STEPS = 100
 MAX_EDGE = 4096
@@ -220,7 +223,7 @@ def request_body(job: Job) -> dict[str, Any]:
     if job.flow_shift is not None:
         sample_params["flow_shift"] = job.flow_shift
 
-    return {
+    body: dict[str, Any] = {
         "prompt": job.prompt,
         "negative_prompt": job.negative_prompt,
         "width": job.width,
@@ -232,6 +235,16 @@ def request_body(job: Job) -> dict[str, Any]:
         "output_format": OUTPUT_FORMAT,
         "sample_params": sample_params,
     }
+
+    # Several references only mean several things if each one has an index of
+    # its own -- that is what lets a prompt say "put the hat from image 2 on
+    # the person in image 1". Without it they are composed with nothing to tell
+    # them apart. Sent only when there is more than one, because with a single
+    # reference the setting has nothing to number.
+    if len(job.references) > 1:
+        body["increase_ref_index"] = True
+
+    return body
 
 
 def _paths_for(job: Job) -> list[Path]:

@@ -8,8 +8,8 @@
     "diffusionModel": {
       "type": "string",
       "format": "aistudio-path",
-      "default": "models/qwen-image-edit-2511/qwen-image-edit-2511-Q4_K_M.gguf",
-      "description": "Qwen-Image-Edit transformer in GGUF, relative to the managed storage directory. The quantisation is the main VRAM lever: Q4_K_M is around 12 GiB, Q8_0 roughly double that and will not stay resident on a 16 GiB card."
+      "default": "models/qwen-image-edit-2511/qwenedit-aio-unet-v23.safetensors",
+      "description": "The transformer, relative to the managed storage directory. Two are installed: the Rapid v23 merge (default) reaches a finished image in 4 unguided steps, and stock Qwen-Image-Edit 2511 at Q4_K_M needs 20 steps at CFG 2.5 for a comparable result -- five times the sampling for a checkpoint 7 GiB smaller. Changing this restarts the arm, and the console's step and CFG defaults assume the Rapid one."
     },
     "vae": {
       "type": "string",
