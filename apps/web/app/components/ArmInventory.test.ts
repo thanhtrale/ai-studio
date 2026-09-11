@@ -12,6 +12,7 @@ function arm(overrides: Partial<ArmSummary> = {}): ArmSummary {
     modality: 'text',
     protocol: 'openai',
     lifecycle: 'resident',
+    capabilities: [],
     gpu: 'exclusive',
     vramEstimateMb: 8000,
     state: 'stopped',

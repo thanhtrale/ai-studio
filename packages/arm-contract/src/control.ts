@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-import type { ArmGpuMode, ArmLifecycle, ArmModality, ArmProtocol } from './manifest.js';
+import type {
+  ArmCapability,
+  ArmGpuMode,
+  ArmLifecycle,
+  ArmModality,
+  ArmProtocol,
+} from './manifest.js';
 import type { ParamsSchema } from './params.js';
 import type { LaunchValue } from './substitute.js';
 
@@ -17,6 +23,12 @@ export interface ArmSummary {
   modality: ArmModality | null;
   protocol: ArmProtocol | null;
   lifecycle: ArmLifecycle | null;
+  /**
+   * The job contracts this arm speaks. Empty means it serves none of them --
+   * a scaffold, or an arm whose manifest did not parse -- and a client that
+   * needs one should not offer it.
+   */
+  capabilities: ArmCapability[];
   gpu: ArmGpuMode | null;
   vramEstimateMb: number | null;
   state: ArmState;

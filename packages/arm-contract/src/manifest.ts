@@ -5,10 +5,24 @@ export const ARM_PROTOCOLS = ['native', 'openai', 'comfy', 'cli'] as const;
 export const ARM_LIFECYCLES = ['resident', 'oneshot'] as const;
 export const ARM_GPU_MODES = ['exclusive', 'none'] as const;
 
+/**
+ * Job contracts an arm speaks -- which is not the same question as its
+ * modality.
+ *
+ * Two image arms can be entirely unable to run each other's jobs: one takes a
+ * prompt and a size, another takes references, a batch and a sampler. A console
+ * that picks by modality alone will happily offer an arm it cannot drive, so an
+ * arm says here what it can actually be asked to do. An arm that declares
+ * nothing is offered nowhere, which is the right answer for a scaffold whose
+ * only working endpoint is its health check.
+ */
+export const ARM_CAPABILITIES = ['image.generate', 'video.generate'] as const;
+
 export type ArmModality = (typeof ARM_MODALITIES)[number];
 export type ArmProtocol = (typeof ARM_PROTOCOLS)[number];
 export type ArmLifecycle = (typeof ARM_LIFECYCLES)[number];
 export type ArmGpuMode = (typeof ARM_GPU_MODES)[number];
+export type ArmCapability = (typeof ARM_CAPABILITIES)[number];
 
 /** Substituted by the supervisor with the loopback port it allocated. */
 export const PORT_PLACEHOLDER = 'port';
@@ -52,12 +66,25 @@ export const armManifestSchema = z
     modality: z.enum(ARM_MODALITIES),
     protocol: z.enum(ARM_PROTOCOLS),
     lifecycle: z.enum(ARM_LIFECYCLES),
+    capabilities: z.array(z.enum(ARM_CAPABILITIES)).default([]),
     resources: resourcesSchema.default({ gpu: 'exclusive' }),
     launch: launchSchema,
     health: healthSchema.default({ type: 'none' }),
     params: z.string().min(1),
   })
   .superRefine((manifest, ctx) => {
+    // A capability names a modality in its own first segment, so the two can
+    // disagree -- and a video arm claiming `image.generate` would be offered in
+    // the wrong console with no other symptom.
+    for (const [index, capability] of manifest.capabilities.entries()) {
+      if (capability.split('.')[0] === manifest.modality) continue;
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capabilities', index],
+        message: `capability "${capability}" does not belong to a ${manifest.modality} arm`,
+      });
+    }
+
     if (manifest.lifecycle !== 'resident') return;
 
     if (manifest.health.type !== 'http') {

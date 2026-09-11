@@ -69,6 +69,17 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
     const refImages = referenceIds.map((id) => armImagePath(id));
     const client = supervisorClient(event);
 
+    // The console only offers arms that declare this contract, but the console
+    // is not the only caller. Checking here means an arm that cannot run an
+    // image job is refused before the broker puts it on the card and its
+    // parameters fail to validate somewhere less legible.
+    const { arms } = await client.inventory();
+    const target = arms.find((candidate) => candidate.id === armId);
+    if (!target) throw new RelayError('not_found', `unknown arm "${armId}"`);
+    if (!target.capabilities.includes('image.generate')) {
+      throw new RelayError('invalid_request', `arm "${armId}" does not serve image jobs`);
+    }
+
     const report = await client.job<ImageGenerateResponse['report']>(armId, {
       jobId,
       params: body.armParams ?? {},

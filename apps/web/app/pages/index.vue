@@ -9,7 +9,7 @@
  */
 import { computed } from 'vue';
 
-import type { ArmModality } from '@ai-studio/arm-contract';
+import type { ArmCapability, ArmModality } from '@ai-studio/arm-contract';
 
 import MediaThumb from '../components/MediaThumb.vue';
 import UiBadge from '../components/ui/Badge.vue';
@@ -25,6 +25,8 @@ interface StudioFunction {
   title: string;
   blurb: string;
   modality: ArmModality;
+  /** The job contract this card's console needs; null when it has no console. */
+  capability: ArmCapability | null;
   /** Null while no console has been built for this modality. */
   to: string | null;
   glyph: string;
@@ -37,6 +39,7 @@ const FUNCTIONS: StudioFunction[] = [
     blurb:
       'LTX-2.5 distilled, eight steps, video and audio in one pass. Text-to-video or a still to animate, with the first-party prompt enhancer and both latent upsamplers.',
     modality: 'video',
+    capability: 'video.generate',
     to: '/generate/video',
     glyph: '▶',
   },
@@ -46,6 +49,7 @@ const FUNCTIONS: StudioFunction[] = [
     blurb:
       'Qwen-Image-Edit on stable-diffusion.cpp. Text-to-image, or up to four reference images composed into one edit, with a batch that writes every attempt to the library separately.',
     modality: 'image',
+    capability: 'image.generate',
     to: '/generate/image',
     glyph: '▣',
   },
@@ -54,13 +58,18 @@ const FUNCTIONS: StudioFunction[] = [
     title: 'Text',
     blurb: 'A llama.cpp arm is scaffolded. No console yet.',
     modality: 'text',
+    capability: null,
     to: null,
     glyph: '≡',
   },
 ];
 
 function status(entry: StudioFunction): { tone: 'ok' | 'warn' | 'neutral'; label: string } {
-  const candidates = arms.value.filter((arm) => arm.modality === entry.modality);
+  // A card is about a console, so it counts arms that can serve one -- except
+  // the text card, which has no console and no capability to count.
+  const candidates = arms.value.filter((arm) =>
+    entry.capability ? arm.capabilities.includes(entry.capability) : arm.modality === entry.modality,
+  );
   if (candidates.length === 0) return { tone: 'warn', label: 'no arm discovered' };
   if (!entry.to) return { tone: 'neutral', label: 'no console yet' };
   if (candidates.some((arm) => arm.state === 'running')) return { tone: 'ok', label: 'arm running' };

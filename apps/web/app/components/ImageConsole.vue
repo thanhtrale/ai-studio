@@ -115,8 +115,11 @@ const SCHEDULERS = [
   { value: 'bong_tangent', label: 'bong_tangent' },
 ];
 
+// By capability, not modality: `image-diffusers` is an image arm too, but it
+// is a scaffold with only a health endpoint, and offering it here would hand
+// the user a picker entry whose every job fails.
 const imageArms = computed(() =>
-  props.arms.filter((arm) => arm.modality === 'image' && arm.lifecycle === 'resident'),
+  props.arms.filter((arm) => arm.capabilities.includes('image.generate')),
 );
 const armId = ref<string>('');
 
@@ -147,6 +150,19 @@ function schemaProperty(key: string): SchemaProperty | null {
 const modelName = computed(() => {
   const value = schemaProperty('diffusionModel')?.default;
   return typeof value === 'string' ? (value.split('/').pop() ?? value) : null;
+});
+
+/**
+ * Three different things, told apart: nothing to pick, something picked whose
+ * model is known, and something picked that names no default model. Reading
+ * the last as the first is how this line once claimed no arm existed while an
+ * arm was selected in the control above it.
+ */
+const armHint = computed(() => {
+  if (!arm.value) {
+    return 'No arm declares image.generate. Check capabilities in a manifest under arms/.';
+  }
+  return modelName.value ?? 'This arm declares no default diffusion model.';
 });
 
 // Start parameters: changing either restarts the arm, because both decide how
@@ -417,8 +433,7 @@ async function generate(): Promise<void> {
       <UiField label="Arm" for="arm">
         <UiSelect id="arm" v-model="armId" :options="armOptions" />
         <template #hint>
-          <span v-if="modelName">{{ modelName }}</span>
-          <span v-else>No image arm is discovered. Check the manifest under arms/.</span>
+          <span>{{ armHint }}</span>
         </template>
       </UiField>
 

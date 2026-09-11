@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { formatManifestIssues } from './manifest.js';
 import { parseArmManifestYaml } from './manifest-yaml.js';
 
 // Verbatim from design.md - decision 3.
@@ -103,6 +104,50 @@ describe('arm manifest', () => {
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.issues.map((issue) => issue.path)).toContain('launch.args');
+    });
+
+    it('declares no capability unless the manifest says so', () => {
+      const result = parseArmManifestYaml(RESIDENT_EXAMPLE);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // A scaffold serves no job contract, and silence has to mean that rather
+      // than "whatever its modality suggests".
+      expect(result.manifest.capabilities).toEqual([]);
+    });
+
+    it('keeps a capability that matches the modality', () => {
+      const result = parseArmManifestYaml(`${RESIDENT_EXAMPLE}
+capabilities: [text.generate]
+`);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      // There is no text console, so there is no such capability to declare.
+      expect(result.issues.map((issue) => issue.path)).toContain('capabilities.0');
+    });
+
+    it('rejects a capability belonging to another modality', () => {
+      const result = parseArmManifestYaml(`${RESIDENT_EXAMPLE.replace('modality: text', 'modality: video')}
+capabilities: [image.generate]
+`);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.issues.map((issue) => issue.path)).toContain('capabilities.0');
+      expect(formatManifestIssues(result.issues)).toMatch(/does not belong to a video arm/);
+    });
+
+    it('accepts a capability that matches the modality', () => {
+      const result = parseArmManifestYaml(
+        `${RESIDENT_EXAMPLE.replace('modality: text', 'modality: image')}
+capabilities: [image.generate]
+`,
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.manifest.capabilities).toEqual(['image.generate']);
     });
 
     it('allows one-shot arms to omit both health check and port', () => {

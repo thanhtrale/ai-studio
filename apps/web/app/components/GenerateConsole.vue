@@ -59,8 +59,8 @@ const props = defineProps<{
   initialReference?: string | null;
 }>();
 
-/** Only video arms can take one of these jobs; the rest are other modalities. */
-const videoArms = computed(() => props.arms.filter((arm) => arm.modality === 'video'));
+/** By declared capability: an arm that cannot take one of these jobs is not offered. */
+const videoArms = computed(() => props.arms.filter((arm) => arm.capabilities.includes('video.generate')));
 const armId = ref<string>('');
 
 watch(

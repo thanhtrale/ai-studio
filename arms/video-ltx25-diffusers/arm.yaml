@@ -3,6 +3,8 @@ name: LTX-2.5 distilled (Diffusers, video + audio)
 modality: video
 protocol: native
 lifecycle: resident
+capabilities:
+  - video.generate
 
 resources:
   gpu: exclusive

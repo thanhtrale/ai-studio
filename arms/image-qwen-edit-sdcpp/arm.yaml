@@ -8,6 +8,11 @@ protocol: native
 # a second job in the same configuration is brokered in 0.0 s rather than
 # re-reading twelve gigabytes.
 lifecycle: resident
+# This arm answers the image console's job contract: a prompt, a frame, up to
+# four references and a batch. Declaring it is what puts it in that console's
+# picker -- modality alone would also match arms that cannot run such a job.
+capabilities:
+  - image.generate
 
 resources:
   gpu: exclusive
