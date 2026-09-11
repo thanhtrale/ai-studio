@@ -99,6 +99,9 @@ class GenerationReport:
     peak_vram_allocated_gib: float
     peak_vram_reserved_gib: float
     peak_host_rss_gib: float
+    # What actually reached the model. Equal to the request unless the enhancer
+    # ran, and the caller has no other way to find out what it produced.
+    prompt_used: str = ""
     stages: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
@@ -479,6 +482,7 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
         seconds_per_step=per_step,
         steps=len(DISTILLED_SIGMA_VALUES),
         seed=seed,
+        prompt_used=prompt,
         out_path=str(job.out_path),
         out_bytes=job.out_path.stat().st_size if job.out_path.exists() else 0,
         peak_vram_allocated_gib=max((r.peak_vram_gib for r in reports), default=0.0),

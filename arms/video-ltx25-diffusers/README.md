@@ -113,6 +113,7 @@ how the transformer is placed and that cannot change without reloading it.
 | `model` | `models/ltx-2.5-distilled` | pipeline directory, inside `storage/` |
 | `outputDir` | `outputs` | root that every job output path is confined to |
 | `inputDir` | `inputs` | root that a job's conditioning image is confined to |
+| `offloadDir` | `cache/ltx25-offload` | scratch root: `offload=group-disk`, and the bf16 text encoder either way |
 | `precision` | `bf16` | `bf16` \| `fp8` \| `int8` — bf16 is both the reference and the fastest here |
 | `offload` | `group-stream` | `group-stream` \| `group` \| `model` \| `sequential` \| `none` |
 | `blocksPerGroup` | `1` | transformer blocks moved as one unit; larger is strictly slower |
@@ -160,6 +161,11 @@ POST /generate
   "image": "frame.png",
   "enhancePrompt": false, "spatialUpsample": false, "temporalUpsample": false }
 ```
+
+The response is the run's own report: per-stage seconds, peak VRAM and spill,
+`seed` (the one actually used, which matters when the request was `-1`), and
+`prompt_used` — what reached the model, which differs from `prompt` when the
+enhancer ran and is otherwise unknowable to the caller.
 
 `width` and `height` must be multiples of 32 and `numFrames` must be `8n+1`,
 matching the VAE's compression; the pipeline would otherwise round them silently.

@@ -75,6 +75,38 @@ Adding an ollama arm is a manifest and nothing else.
 
 Model weights and generated output live under `storage/`, which is git-ignored apart from its directory skeleton.
 
+## The console
+
+Every view has a URL and every page is rendered on the server first — there is no client-only shell.
+
+| route | what it is |
+| --- | --- |
+| `/` | what the studio can do, one card per function. A card says *no arm discovered* or *no console yet* rather than pretending |
+| `/generate/video` | the LTX-2.5 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
+| `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
+
+Arms are a drawer rather than a route: starting one evicts whichever arm holds the GPU, so it is something you do to the machine from wherever you are.
+
+Shared UI lives in `apps/web/app/components/ui/` — button, field, input, select, checkbox, card, badge, alert, modal, drawer. Pages compose those rather than restyling controls, which is what keeps one form looking like the next.
+
+## The library
+
+`storage/` **is** the index. A file's path relative to it is its identity, and a JSON sidecar under `storage/library/` mirrors that path with what the studio knows about it:
+
+```
+storage/
+  inputs/   frame.png                          <- uploads; the only place an arm may read a job input from
+  outputs/  2026-09-11/123857-0ce45c0d.mp4     <- generations, filed by the day they were made
+            bench/bench-bf16-group-stream-0.mp4   <- whatever a script wrote, in its own folder
+  library/  outputs/2026-09-11/123857-0ce45c0d.mp4.json
+```
+
+That choice is what lets the library show files it never created: a clip written by `bench.py` appears with no registration step, and lists with what the filesystem knows. A record adds the rest — job id, arm, prompt, the prompt the enhancer actually sent, the reference image, the settings, and the run's own report — which is what makes *use these settings* reproduce a run rather than approximate it.
+
+Sidebar folders are directories, not a separate concept: date folders for generations and whatever name a script chose for a batch are the same mechanism.
+
+Video thumbnails are the `<video>` element with a `#t=` fragment, so the browser decodes the frame and the studio needs no ffmpeg and no second copy on disk. The media route answers range requests, which is what makes that work — and what lets a clip be scrubbed.
+
 ## GPU arbitration
 
 One arm holds the GPU at a time. Starting a second exclusive arm stops the first and waits for it to actually exit before launching. Stopping kills the whole process tree — a Python arm's workers would otherwise keep the allocation alive.
@@ -91,6 +123,7 @@ The boundaries that are enforced:
 - Processes are spawned with an argv array and no shell, so a parameter containing shell metacharacters is just a string.
 - Parameters are validated against the arm's JSON Schema, and path parameters must resolve inside `storage/`.
 - The supervisor binds loopback only and requires a bearer credential. Arm ports are never sent to the browser.
+- Media ids are whitelisted, not merely checked for `..`: one of two known roots, plain path segments, a known media extension, and no Win32 device name. Uploaded filenames are reduced to one sanitised segment and never overwrite an existing file, because records already point at it.
 
 ## Docs
 

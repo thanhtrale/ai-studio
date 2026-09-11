@@ -41,6 +41,8 @@ launch:
     - "{{outputDir}}"
     - "--input-dir"
     - "{{inputDir}}"
+    - "--offload-dir"
+    - "{{offloadDir}}"
     - "--transformer-gguf"
     - "{{transformerGguf}}"
     - "--text-encoder-dir"
