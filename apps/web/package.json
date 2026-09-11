@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "nuxt prepare",
     "dev": "nuxt dev",
     "build": "nuxt build",
     "typecheck": "nuxt prepare && vue-tsc --build",
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-studio/arm-contract": "workspace:*",
+    "@ai-studio/arm-contract": "*",
     "nuxt": "^4.5.2",
     "vue": "^3.5.42"
   },

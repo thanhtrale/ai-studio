@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-studio/arm-contract": "workspace:*"
+    "@ai-studio/arm-contract": "*"
   },
   "devDependencies": {
     "tsx": "^4.23.13",

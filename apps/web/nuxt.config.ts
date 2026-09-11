@@ -31,10 +31,11 @@ export default defineNuxtConfig({
   vite: {
     plugins: [tailwindcss()],
   },
-  // listhen generates a self-signed certificate, so a clean checkout needs no
-  // certificate files of its own.
+  // Plain http on the loopback interface. The self-signed certificate listhen
+  // generates cost a browser warning on every fresh profile and bought nothing
+  // here: nothing leaves this machine, and no API this console uses is gated
+  // behind a secure context.
   devServer: {
-    https: true,
     host: '127.0.0.1',
     port: 3000,
   },

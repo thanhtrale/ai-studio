@@ -4,27 +4,20 @@ import process from 'node:process';
 const RESET = '\u001b[0m';
 
 const targets = [
-  { label: 'supervisor', colour: '\u001b[36m', filter: '@ai-studio/supervisor' },
-  { label: 'web', colour: '\u001b[35m', filter: '@ai-studio/web' },
+  { label: 'supervisor', colour: '\u001b[36m', workspace: '@ai-studio/supervisor' },
+  { label: 'web', colour: '\u001b[35m', workspace: '@ai-studio/web' },
 ];
 
 const width = Math.max(...targets.map((target) => target.label.length));
 
 // Node refuses to spawn a .cmd shim without a shell. npm_execpath points at
-// whatever launched us: a JS entry point (run it with node) or a real binary
-// (spawn it directly). Both avoid going through a shell.
+// whatever launched us -- npm's own cli.js under `npm run dev` -- so it is run
+// with this same node binary. Run directly as `node scripts/dev.mjs` there is
+// no such variable, and `npm` from PATH is the fallback.
 const execPath = process.env['npm_execpath'];
 
-if (execPath !== undefined && !/pnpm/i.test(execPath)) {
-  process.stderr.write(
-    'This is a pnpm workspace: the dev script shells out to `--filter`, and internal\n' +
-      'packages use the `workspace:` protocol. Run `pnpm dev` instead.\n',
-  );
-  process.exit(1);
-}
-
 const isScript = execPath !== undefined && /\.[cm]?js$/.test(execPath);
-const command = isScript ? process.execPath : (execPath ?? 'pnpm');
+const command = isScript ? process.execPath : (execPath ?? 'npm');
 const baseArgs = isScript ? [execPath] : [];
 
 /** @type {import('node:child_process').ChildProcess[]} */
@@ -47,7 +40,9 @@ function pipe(stream, target) {
 }
 
 for (const target of targets) {
-  const child = spawn(command, [...baseArgs, '--filter', target.filter, 'dev'], {
+  // --silent drops npm's own banner per child; the package's own output is
+  // untouched and still arrives prefixed with the label below.
+  const child = spawn(command, [...baseArgs, 'run', '--silent', 'dev', '--workspace', target.workspace], {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
     windowsHide: true,

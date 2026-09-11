@@ -1,6 +1,5 @@
-# Node / pnpm
+# Node
 node_modules/
-.pnpm-store/
 *.log
 
 # Nuxt / Nitro / Vite
@@ -16,7 +15,7 @@ dist/
 .env.*
 !.env.example
 
-# TLS material (Nuxt dev dùng self-signed tự sinh; đây là chặn lỡ tay commit key)
+# TLS material (không dùng nữa vì dev server chạy http; giữ để chặn lỡ tay commit key)
 certs/
 *.pem
 *.key

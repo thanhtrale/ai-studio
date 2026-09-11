@@ -14,17 +14,16 @@ A local studio for running generation models. Two moving parts:
   +----------------+  loop  +------------------+       +-------+
 ```
 
-The browser never talks to an arm directly. It cannot: the dev server is HTTPS and arms are plain HTTP on loopback, so every request is relayed by the web app's server side.
+The browser never talks to an arm directly. Every request is relayed by the web app's server side, which is where the supervisor credential lives and where a job's paths are confined -- neither belongs in a page.
 
 ## Prerequisites
 
-- **Node 24.20.0** (`.nvmrc`), **pnpm 12**
+- **Node 24.20.0** (`.nvmrc`), **npm 11** (ships with it)
 - An NVIDIA driver new enough for the CUDA runtime your arms bundle. Arms ship their own CUDA libraries, so only the driver is shared.
 
 ```powershell
 nvm use            # or install 24.20.0
-npm install -g pnpm
-pnpm install
+npm install
 Copy-Item .env.example .env
 ```
 
@@ -37,18 +36,18 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ## Running
 
 ```powershell
-pnpm dev             # supervisor + web, interleaved output, Ctrl+C stops both
-pnpm dev:web         # web only
-pnpm dev:supervisor  # supervisor only
+npm run dev             # supervisor + web, interleaved output, Ctrl+C stops both
+npm run dev:web         # web only
+npm run dev:supervisor  # supervisor only
 ```
 
-The console is at <https://127.0.0.1:3000>. The certificate is self-signed and generated on the fly, so the browser will warn once; nothing needs to be installed.
+The console is at <http://127.0.0.1:3000>. Plain http, bound to loopback: nothing here leaves the machine, and a self-signed certificate only cost a browser warning per profile.
 
 ### Two processes, on purpose
 
 The supervisor is deliberately **not** part of Nuxt. Nuxt reloads its server on every edit, and a reload would orphan any arm it had spawned — leaving several gigabytes of VRAM held by a process nothing can reach. Keeping them separate also means restarting the web app never interrupts a running generation.
 
-If you start only `pnpm dev:web`, the console loads and reports *Supervisor unavailable* rather than pretending every arm is stopped.
+If you start only `npm run dev:web`, the console loads and reports *Supervisor unavailable* rather than pretending every arm is stopped.
 
 ## Arms
 
@@ -157,9 +156,9 @@ The boundaries that are enforced:
 ## Checks
 
 ```powershell
-pnpm test        # unit + integration
-pnpm lint
-pnpm -r typecheck
+npm test           # unit + integration
+npm run lint
+npm run typecheck  # every workspace, web included
 ```
 
 Integration tests spawn real processes and real listeners, so they take longer than the rest.

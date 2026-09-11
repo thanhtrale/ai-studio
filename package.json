@@ -2,21 +2,25 @@
   "name": "ai-studio",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.3.4",
+  "packageManager": "npm@11.19.0",
   "engines": {
     "node": ">=24.20.0",
-    "pnpm": ">=12"
+    "npm": ">=11"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:web": "pnpm --filter @ai-studio/web dev",
-    "dev:supervisor": "pnpm --filter @ai-studio/supervisor dev",
-    "typecheck": "pnpm -r typecheck",
+    "dev:web": "npm run dev --workspace @ai-studio/web",
+    "dev:supervisor": "npm run dev --workspace @ai-studio/supervisor",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "test": "vitest run"
   },
   "devDependencies": {
-    "@ai-studio/arm-contract": "workspace:*",
+    "@ai-studio/arm-contract": "*",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.4.1",
     "@vitejs/plugin-vue": "^6.0.8",
@@ -26,5 +30,8 @@
     "typescript": "~5.9.0",
     "typescript-eslint": "^8.70.0",
     "vitest": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

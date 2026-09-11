@@ -349,7 +349,7 @@ test_jobobject.py` asserts it directly.
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-These do not run under `pnpm test`, which is vitest. Four files:
+These do not run under `npm test`, which is vitest. Four files:
 
 - `test_logscan.py` — the log parser, line by line.
 - `test_generation.py` — job validation, which is this arm's security boundary:

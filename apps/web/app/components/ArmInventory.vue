@@ -88,7 +88,7 @@ const tone = (arm: ArmSummary): 'ok' | 'bad' | 'warn' | 'neutral' => {
     >
       <p class="mt-1 text-sm text-amber-100/80">
         Arm state is unknown while the supervisor is down. Start it with
-        <code class="rounded bg-black/30 px-1">pnpm dev</code>; this view recovers on its own.
+        <code class="rounded bg-black/30 px-1">npm run dev</code>; this view recovers on its own.
       </p>
     </UiAlert>
 
