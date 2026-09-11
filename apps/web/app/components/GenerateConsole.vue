@@ -37,6 +37,7 @@ import {
   type Duration,
   type Frame,
 } from '../utils/frame';
+import { restoreKey } from '../utils/restore';
 import JobTimeline from './JobTimeline.vue';
 import MediaPicker from './MediaPicker.vue';
 import MediaThumb from './MediaThumb.vue';
@@ -250,10 +251,23 @@ function restoreFrom(meta: MediaMeta): void {
   exact.value = { width: settings.width, height: settings.height, numFrames: settings.numFrames };
 }
 
+/**
+ * Filled in once per record, not once per fetch.
+ *
+ * The library refetches after every upload and every generation, and hands back
+ * a new object each time. Restoring on object identity meant a refetch refilled
+ * the form underneath whoever was typing in it.
+ */
+let restored: string | null = null;
+
 watch(
   () => props.restore,
   (meta) => {
-    if (meta) restoreFrom(meta);
+    if (!meta) return;
+    const key = restoreKey(meta);
+    if (key === restored) return;
+    restored = key;
+    restoreFrom(meta);
   },
   { immediate: true },
 );
