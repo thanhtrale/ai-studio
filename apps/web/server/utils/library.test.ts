@@ -144,6 +144,32 @@ describe('describeMedia', () => {
     expect(item?.kind).toBe('image');
   });
 
+  it('reads the pixel size out of an image header', async () => {
+    const header = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from([0, 0, 0, 13]),
+      Buffer.from('IHDR'),
+      Buffer.from([0, 0, 4, 176]), // 1200
+      Buffer.from([0, 0, 3, 132]), // 900
+      Buffer.from([8, 6, 0, 0, 0]),
+    ]);
+    mkdirSync(path.join(storage, 'inputs'), { recursive: true });
+    writeFileSync(path.join(storage, 'inputs', 'shot.png'), header);
+
+    const item = await describeMedia(storage, 'inputs/shot.png');
+
+    expect(item?.width).toBe(1200);
+    expect(item?.height).toBe(900);
+  });
+
+  it('leaves the size absent rather than guessing at a header it cannot read', async () => {
+    put('inputs/broken.png', 'not really a png');
+    put('outputs/clip.mp4', 'nor a video header this reads');
+
+    expect((await describeMedia(storage, 'inputs/broken.png'))?.width).toBeUndefined();
+    expect((await describeMedia(storage, 'outputs/clip.mp4'))?.width).toBeUndefined();
+  });
+
   it('returns null for an id with no file behind it', async () => {
     expect(await describeMedia(storage, 'inputs/missing.png')).toBeNull();
   });

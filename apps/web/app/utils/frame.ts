@@ -33,14 +33,27 @@ export function aspectRatio(aspect: Aspect): number {
  * Height is solved from the pixel budget and rounded first, then width follows
  * from the rounded height. Rounding both independently drifts the ratio further:
  * for 16:9 at 0.5 MP that is the difference between 928x544 and 960x544.
+ *
+ * Takes a ratio rather than a named aspect because the most useful ratio is
+ * often not in the list: matching a reference image means whatever that file
+ * happens to be, and for image-to-video a frame that does not match the still
+ * is the wrong frame -- the model is being handed a first frame it then has to
+ * letterbox or stretch.
  */
-export function resolveFrame(aspect: Aspect, megapixels: number): Frame {
-  const ratio = aspectRatio(aspect);
+export function frameForRatio(ratio: number, megapixels: number): Frame {
+  const safe = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
   const budget = Math.max(0.05, megapixels) * 1_000_000;
-  const height = snap(Math.sqrt(budget / ratio), SPATIAL_MULTIPLE, 256);
-  const width = snap(height * ratio, SPATIAL_MULTIPLE, 256);
+  const height = snap(Math.sqrt(budget / safe), SPATIAL_MULTIPLE, 256);
+  const width = snap(height * safe, SPATIAL_MULTIPLE, 256);
   return { width, height, megapixels: (width * height) / 1_000_000, ratio: width / height };
 }
+
+export function resolveFrame(aspect: Aspect, megapixels: number): Frame {
+  return frameForRatio(aspectRatio(aspect), megapixels);
+}
+
+/** The select value standing for "whatever the reference image is". */
+export const REFERENCE_ASPECT = 'reference';
 
 export interface Duration {
   numFrames: number;

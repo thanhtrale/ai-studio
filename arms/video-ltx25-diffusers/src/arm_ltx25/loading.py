@@ -82,6 +82,8 @@ class LoadReport:
     vram_free_gib: float
     host_rss_gib: float
     import_seconds: float = 0.0
+    # Named pieces of the load with their own seconds, in the order they ran.
+    parts: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 def host_rss_gib() -> float:
@@ -349,16 +351,40 @@ def _offload_text_encoder(pipe: Any, offload_dir: Path) -> None:
     disk_offload(pipe.text_encoder, offload_dir=str(offload_dir), execution_device=torch.device("cuda"))
 
 
-def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
+class _Part:
+    """One named piece of the load, timed and reported as it happens.
+
+    The load is the longest single thing a cold job does and it was one opaque
+    number for a long time. It is really five costs with different cures -- a
+    fixed Python import, two large reads off NVMe, and two cheap placements --
+    and only a breakdown says which one to argue with.
+    """
+
+    def __init__(self, progress: Any | None, key: str, label: str) -> None:
+        self._progress = progress
+        self._key = f"load-{key}"
+        self._label = label
+
+    def __enter__(self) -> _Part:
+        if self._progress is not None:
+            self._progress.start(self._key, self._label, parent="load")
+        self._started = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type: object, *_: object) -> None:
+        self.seconds = time.perf_counter() - self._started
+        if self._progress is not None and exc_type is None:
+            self._progress.finish_step(self._key, seconds=self.seconds)
+
+
+def load_pipeline(config: LoadConfig, progress: Any | None = None) -> tuple[Any, LoadReport]:
     """Build an `LTX2Pipeline` for the distilled checkpoint."""
     # Timed apart from the weights, and deliberately not folded into `seconds`.
     # The first `import diffusers` in a process pulls torch and transformers in
     # behind it and costs around 16 s on this machine -- a sixth of a cold job,
     # and a sixth that has nothing to do with how many bytes the weights are.
-    import_started = time.perf_counter()
-    from diffusers import LTX2Pipeline
-
-    import_seconds = time.perf_counter() - import_started
+    with _Part(progress, "imports", "Python imports") as imports:
+        from diffusers import LTX2Pipeline
 
     if not config.model_dir.is_dir():
         raise FileNotFoundError(f"model directory does not exist: {config.model_dir}")
@@ -368,7 +394,8 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
 
-    transformer = _load_transformer(config)
+    with _Part(progress, "transformer", "Read the transformer") as transformer_part:
+        transformer = _load_transformer(config)
     if config.offload.startswith("group"):
         # Hooked now, before the text encoder allocates anything, so that 35.38
         # GiB of transformer and 22.28 GiB of text encoder are never both live.
@@ -378,7 +405,10 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
         # 8.10 s per step before and after, host RAM 58.3 then 58.4 GiB. The
         # ordering was not what made the arm slower than the same weights driven
         # by a standalone script -- see the note on stage parking in `stages.py`.
-        transformer.enable_group_offload(**_group_offload_kwargs(config))
+        with _Part(progress, "hooks", "Attach the offload hooks") as hooks:
+            transformer.enable_group_offload(**_group_offload_kwargs(config))
+    else:
+        hooks = None
     # Drop the bf16 shard buffers before the text encoder starts allocating.
     gc.collect()
 
@@ -406,7 +436,8 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
     # 58.3 of 59.2 GiB is not free.
     kwargs["diffusion_decoder"] = None
 
-    pipe = LTX2Pipeline.from_pretrained(config.model_dir, **kwargs)
+    with _Part(progress, "pipeline", "Read the encoder, VAE and vocoder") as pipeline_part:
+        pipe = LTX2Pipeline.from_pretrained(config.model_dir, **kwargs)
     # Left on. A step on this machine takes long enough that a run with no
     # progress output is indistinguishable from a hung one -- which is exactly
     # how the first benchmark looked.
@@ -419,15 +450,26 @@ def load_pipeline(config: LoadConfig) -> tuple[Any, LoadReport]:
     if getattr(pipe, "connectors", None) is not None:
         pipe.connectors.to(torch.device("cuda"))
 
+    encoder_part = None
     if text_encoder is None and config.precision == "bf16":
         root = config.disk_offload_dir or (config.model_dir.parent / "ltx25-offload")
-        _offload_text_encoder(pipe, root / "text-encoder")
+        with _Part(progress, "encoder-offload", "Stage the text encoder on disk") as encoder_part:
+            _offload_text_encoder(pipe, root / "text-encoder")
 
     gc.collect()
     snapshot = vram_snapshot()
+    parts = [
+        {"name": "imports", "seconds": imports.seconds},
+        {"name": "transformer", "seconds": transformer_part.seconds},
+        *([{"name": "hooks", "seconds": hooks.seconds}] if hooks is not None else []),
+        {"name": "pipeline", "seconds": pipeline_part.seconds},
+        *([{"name": "encoder-offload", "seconds": encoder_part.seconds}] if encoder_part else []),
+    ]
+
     report = LoadReport(
         seconds=time.perf_counter() - started,
-        import_seconds=import_seconds,
+        import_seconds=imports.seconds,
+        parts=parts,
         precision=config.precision,
         offload=config.offload,
         pinned=config.pin_weights and config.offload == "group-stream",

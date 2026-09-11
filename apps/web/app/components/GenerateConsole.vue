@@ -16,11 +16,14 @@ import { computed, ref, watch } from 'vue';
 import type { ArmSummary } from '@ai-studio/arm-contract';
 
 import type { ArmGenerationReport, GenerateRequest, GenerateResponse } from '#shared/generate';
+import { ratioLabel } from '#shared/image-size';
 import { formatBytes, type JobSettings, type MediaItem, type MediaMeta } from '#shared/library';
 
 import {
   ASPECTS,
+  frameForRatio,
   latentTokens,
+  REFERENCE_ASPECT,
   resolveDuration,
   resolveFrame,
   resolveOutput,
@@ -123,6 +126,19 @@ const { byId, refresh: refreshMedia } = useMedia();
 const reference = computed(() => (referenceId.value ? (byId.value.get(referenceId.value) ?? null) : null));
 
 /**
+ * The reference image's own ratio, when one is chosen and its header was read.
+ *
+ * Worth offering above every named aspect for an image job: the still becomes
+ * the first frame, so a frame shaped differently from it is one the model has
+ * to letterbox or stretch before it can start.
+ */
+const referenceRatio = computed(() => {
+  const item = reference.value;
+  if (!item?.width || !item.height) return null;
+  return { ratio: item.width / item.height, label: ratioLabel(item.width, item.height) };
+});
+
+/**
  * The exact geometry of a run being reused, when there is one.
  *
  * Aspect and megapixels do not determine a size on their own -- they are rounded
@@ -136,7 +152,12 @@ watch([aspect, megapixels, seconds, fps], () => (exact.value = null), { flush: '
 
 const frame = computed<Frame>(() => {
   const fixed = exact.value;
-  if (!fixed) return resolveFrame(aspect.value as Aspect, megapixels.value);
+  if (!fixed) {
+    const matched = aspect.value === REFERENCE_ASPECT ? referenceRatio.value : null;
+    return matched
+      ? frameForRatio(matched.ratio, megapixels.value)
+      : resolveFrame(aspect.value as Aspect, megapixels.value);
+  }
   return {
     width: fixed.width,
     height: fixed.height,
@@ -156,7 +177,48 @@ const output = computed(() =>
 );
 const tokens = computed(() => latentTokens(frame.value.width, frame.value.height, duration.value.numFrames));
 
-const aspectOptions = ASPECTS.map((option) => ({ value: option, label: option }));
+const aspectOptions = computed(() => [
+  ...(referenceRatio.value
+    ? [{ value: REFERENCE_ASPECT, label: `match reference — ${referenceRatio.value.label}` }]
+    : []),
+  ...ASPECTS.map((option) => ({ value: option, label: option })),
+]);
+
+/**
+ * A reference arriving in the URL adopts its shape too, once its size is known.
+ *
+ * Arriving from the library's "animate this image" is the same deliberate act
+ * as picking one in the modal, so it should behave the same -- but the index
+ * may not have loaded when the parameter is first seen, so the adoption waits
+ * for the ratio rather than happening with the assignment.
+ */
+const adoptShapeFor = ref<string | null>(null);
+
+/**
+ * Take a reference, and its shape with it.
+ *
+ * Adopted straight away when the index already knows the image's size -- which
+ * it does on the server, so the first paint is already the right shape rather
+ * than a frame that changes under the reader. When it does not, the note below
+ * picks it up as soon as the size arrives.
+ */
+function adoptReference(id: string | null): void {
+  referenceId.value = id;
+  if (!id) return;
+  if (byId.value.get(id)?.width) aspect.value = REFERENCE_ASPECT;
+  else adoptShapeFor.value = id;
+}
+
+watch(referenceRatio, (current) => {
+  // Chose "match reference" and then removed the reference: the panel must not
+  // go on claiming a ratio it no longer has.
+  if (!current && aspect.value === REFERENCE_ASPECT) aspect.value = '16:9';
+
+  if (current && adoptShapeFor.value === referenceId.value) {
+    aspect.value = REFERENCE_ASPECT;
+    adoptShapeFor.value = null;
+  }
+}, { immediate: true });
 
 /** Puts a previous run back into the form, exactly as it was asked for. */
 function restoreFrom(meta: MediaMeta): void {
@@ -167,9 +229,8 @@ function restoreFrom(meta: MediaMeta): void {
   if (typeof previousOffload === 'string') offload.value = previousOffload;
   if (!settings) return;
 
-  if (settings.aspect && (ASPECTS as readonly string[]).includes(settings.aspect)) {
-    aspect.value = settings.aspect;
-  }
+  const known = [REFERENCE_ASPECT, ...ASPECTS] as readonly string[];
+  if (settings.aspect && known.includes(settings.aspect)) aspect.value = settings.aspect;
   if (settings.megapixels) megapixels.value = settings.megapixels;
   if (settings.seconds) seconds.value = settings.seconds;
   fps.value = settings.frameRate;
@@ -189,13 +250,8 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => props.initialReference,
-  (id) => {
-    if (id) referenceId.value = id;
-  },
-  { immediate: true },
-);
+// The prop is optional, so an absent parameter and an explicit null are the same thing here.
+watch(() => props.initialReference, (id) => adoptReference(id ?? null), { immediate: true });
 
 const status = ref<'idle' | 'generating'>('idle');
 const failure = ref<string | null>(null);
@@ -290,6 +346,9 @@ const number = (value: number): string => value.toLocaleString('en-US');
         <p class="text-xs text-slate-500">
           <span class="text-slate-300">{{ frame.width }}&#215;{{ frame.height }}</span>
           &middot; {{ frame.megapixels.toFixed(2) }} MP &middot; actual ratio {{ frame.ratio.toFixed(2) }}
+        </p>
+        <p v-if="!exact && aspect === REFERENCE_ASPECT && reference" class="text-xs text-slate-500">
+          Shaped to {{ reference.name }} ({{ reference.width }}&#215;{{ reference.height }}).
         </p>
         <p v-if="exact" class="text-xs text-indigo-300/80">
           Exact frame from the run being reused. Changing any size control returns to the aspect and
@@ -455,7 +514,7 @@ const number = (value: number): string => value.toLocaleString('en-US');
       kind="image"
       :selected-id="referenceId"
       @close="picking = false"
-      @select="(id) => (referenceId = id)"
+      @select="adoptReference"
     />
   </div>
 </template>

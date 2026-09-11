@@ -43,6 +43,16 @@ export interface MediaItem {
   bytes: number;
   /** Filesystem mtime. The only timestamp available for files with no record. */
   modifiedAt: string;
+  /**
+   * Pixel size, read from the file's own header.
+   *
+   * Images only: a video's dimensions are not in a fixed place in its
+   * container, and the one place they are wanted -- the detail panel -- already
+   * gets them from the element that plays it. Absent for a format or a file
+   * whose header could not be read, which is why every use of it is optional.
+   */
+  width?: number;
+  height?: number;
   /** Present only for media this app recorded -- generated through it, or uploaded. */
   meta?: MediaMeta;
 }

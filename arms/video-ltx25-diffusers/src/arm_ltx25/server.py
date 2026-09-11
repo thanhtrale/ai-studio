@@ -64,7 +64,7 @@ class ArmState:
                 with self.progress.step(
                     "load", "Load model", f"{self.config.precision} · offload {self.config.offload}"
                 ) as reported:
-                    self._pipe, self._load_report = load_pipeline(self.config)
+                    self._pipe, self._load_report = load_pipeline(self.config, self.progress)
                     # Split, because the two halves have different cures: the
                     # imports are a fixed process cost, the weights are bytes
                     # off NVMe at the drive's own rate.

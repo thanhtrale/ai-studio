@@ -1,5 +1,7 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+
+import { HEADER_BYTES, imageSize, type PixelSize } from '#shared/image-size';
 
 import {
   LIBRARY_DIR,
@@ -83,6 +85,34 @@ async function walk(absolute: string, prefix: string, depth: number, found: stri
   }
 }
 
+/**
+ * The head of a file, for the header parser.
+ *
+ * Read on every listing rather than cached in the record, because it is one
+ * bounded read of a file that is already being stat'd -- and a cache would have
+ * to be invalidated by a script that overwrites an image in place, which is
+ * exactly the kind of thing this library is built to notice.
+ */
+async function pixelSize(file: string, bytes: number): Promise<PixelSize | null> {
+  let handle;
+  try {
+    handle = await open(file, 'r');
+  } catch {
+    return null;
+  }
+
+  try {
+    const buffer = Buffer.alloc(Math.min(HEADER_BYTES, Math.max(bytes, 0)));
+    if (buffer.length === 0) return null;
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return imageSize(buffer.subarray(0, bytesRead));
+  } catch {
+    return null;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function describe(storageDir: string, id: string): Promise<MediaItem | null> {
   let stats;
   try {
@@ -92,14 +122,17 @@ async function describe(storageDir: string, id: string): Promise<MediaItem | nul
   }
 
   const meta = await readMeta(storageDir, id);
+  const kind = mediaKind(id) ?? 'image';
+  const size = kind === 'image' ? await pixelSize(path.resolve(storageDir, id), stats.size) : null;
 
   return {
     id,
     name: nameOf(id),
-    kind: mediaKind(id) ?? 'image',
+    kind,
     group: groupOf(id),
     bytes: stats.size,
     modifiedAt: stats.mtime.toISOString(),
+    ...(size ? { width: size.width, height: size.height } : {}),
     ...(meta ? { meta } : {}),
   };
 }

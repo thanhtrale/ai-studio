@@ -161,13 +161,15 @@ class JobProgress:
         def note(self, text: str, replaces: str | None = None) -> None:
             self._progress.annotate(self._key, text, replaces)
 
-    def step(self, key: str, label: str, detail: str | None = None) -> JobProgress._Scope:
+    def step(
+        self, key: str, label: str, detail: str | None = None, parent: str | None = None
+    ) -> JobProgress._Scope:
         """`with progress.step(...)`: opens on entry, closes on a clean exit.
 
         A raised exception deliberately leaves the step open, so `fail` can mark
         the step that was actually running when it went wrong.
         """
-        self.start(key, label, detail)
+        self.start(key, label, detail, parent)
         return JobProgress._Scope(self, key)
 
     # --- counted work --------------------------------------------------------

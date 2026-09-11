@@ -312,20 +312,54 @@ card each round.
 
 ### Where a cold load actually goes
 
-`Load model` is two costs with nothing in common, so the arm reports them apart:
+Not where it looks. `Load model` reports its own parts, and they are nothing
+like an even split of 66 GiB:
 
-| | cold machine | warm file cache |
+| part | cold | warm file cache |
 | --- | ---: | ---: |
-| Python imports (`import diffusers` pulls torch and transformers) | 16.6 s | 3.3 s |
-| reading and placing ~66 GiB of weights | 36.2 s | 29.9 s |
-| **total** | **52.9 s** | **33.3 s** |
+| Python imports (`import diffusers` pulls torch and transformers) | 13.4 s | 3.3 s |
+| read the transformer, 36 GB | 0.6 s | 0.6 s |
+| attach the offload hooks | 0.1 s | 0.1 s |
+| read the text encoder, VAE, vocoder and connectors, ~31 GB | 23.4 s | 24.0 s |
+| stage the text encoder on disk | 1.1 s | 1.3 s |
+| **total** | **44.4 s** | **35.0 s** |
 
-The weights half is at the drive's floor — 66 GiB at the 1.74 GiB/s measured in
-[hardware-baseline](../../docs/hardware-baseline.md) is 38 s — so there is
-nothing to tune there. The lever is not paying it: the supervisor's broker
-reuses an arm already loaded in the configuration a job needs, measured at 0.0 s
-against 52.9 s for a cold start. It is only paid again when the arm was stopped,
-or when a job asks for start parameters the loaded arm does not have.
+**The transformer is not read at all.** 36 GB in 0.6 s is `safetensors`
+memory-mapping it; its pages are faulted in later by the group-offload hooks, a
+block at a time, which is also why step 1 of a run costs 12.2 s against 3.6 s
+for steps 2 to 8. So "load all 66 GiB before anything can start" is not what
+happens, and deferring the transformer past the encode stage — which does not
+need it — would save six tenths of a second.
+
+What the 23.4 s actually is: `from_pretrained` materialising the 23 GiB text
+encoder into host RAM, so that `disk_offload` can put its parameters straight
+back on `meta` and stream them from `.dat` files. Those files already exist —
+accelerate skips rewriting them when `index.json` is present — so the read is
+thrown away.
+
+#### Why the obvious fix for that does not work
+
+Building the encoder with `init_empty_weights()` and handing `disk_offload` the
+existing cache takes the load from 35.0 s to **11.7 s**, and it produces a
+different clip from the same seed. Two separate processes on the normal path
+give byte-identical output, so that difference is the change, not noise:
+
+- `cls(config)` leaves **11 parameters in float32** where `from_pretrained`
+  makes them bfloat16, so those layers then run at a different precision.
+- 48 of the cached tensors are **buffers**, not parameters — a `layer_scalar`
+  per layer — and `disk_offload` does not hook buffers by default. They keep
+  whatever `__init__` gave them instead of what was trained.
+
+Both are silent. A correct version has to reproduce dtypes, buffers and weight
+tying exactly, which means getting `from_pretrained` itself to dispatch without
+materialising (`device_map` with `offload_folder`) — and that rewrites the 23
+GiB cache on every load, which costs more than it saves. Left alone: a wrong
+clip with no error is a far worse outcome than 23 s.
+
+The lever that does work is not paying the load at all. The supervisor's broker
+reuses an arm already loaded in the configuration a job needs — measured at
+0.0 s against 44.4 s for a cold start — so it is paid once per arm, and only
+again when the arm was stopped or a job asks for different start parameters.
 
 ### Every guidance has to be turned off by name
 

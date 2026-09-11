@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { latentTokens, resolveDuration, resolveFrame, resolveOutput } from './frame';
+import { frameForRatio, latentTokens, resolveDuration, resolveFrame, resolveOutput } from './frame';
 
 describe('resolveFrame', () => {
   it('rounds width from the rounded height, not from the raw one', () => {
@@ -72,5 +72,28 @@ describe('resolveOutput', () => {
     expect(out.seconds).toBeCloseTo(duration.seconds, 6);
     // 241 frames over the same 5.04 s is very nearly twice 24 fps.
     expect(out.fps).toBeCloseTo(47.8, 1);
+  });
+});
+
+describe('frameForRatio', () => {
+  it('honours a ratio that is not in the list at all', () => {
+    // 1200x900 reference: 4:3, which the list happens to have.
+    expect(frameForRatio(1200 / 900, 0.5)).toEqual(resolveFrame('4:3', 0.5));
+  });
+
+  it('holds an awkward ratio as closely as multiples of 32 allow', () => {
+    const frame = frameForRatio(1237 / 903, 0.5);
+
+    expect(frame.width % 32).toBe(0);
+    expect(frame.height % 32).toBe(0);
+    expect(frame.ratio).toBeCloseTo(1237 / 903, 1);
+  });
+
+  it('refuses to produce a degenerate frame from a nonsense ratio', () => {
+    for (const ratio of [0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const frame = frameForRatio(ratio, 0.5);
+      expect(frame.width).toBeGreaterThanOrEqual(256);
+      expect(frame.height).toBeGreaterThanOrEqual(256);
+    }
   });
 });
