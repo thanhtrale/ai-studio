@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  facetsOf,
+  featureOf,
+  filterMedia,
   formatBytes,
   generatedMediaId,
   groupLabel,
@@ -11,8 +14,41 @@ import {
   recordId,
   sanitiseUploadName,
   shortDescription,
+  sourceLabel,
+  sourceOf,
+  stackMedia,
+  type ImageJobSettings,
   type MediaItem,
 } from './library';
+
+/** A generated image, recorded the way the image route records one. */
+const batchImage = (id: string, jobId: string, index: number, batch: number, at: string): MediaItem => ({
+  id,
+  name: id.slice(id.lastIndexOf('/') + 1),
+  kind: 'image',
+  group: groupOf(id),
+  bytes: 1024,
+  modifiedAt: at,
+  meta: {
+    source: 'generated',
+    createdAt: at,
+    jobId,
+    armId: 'image-qwen-edit-sdcpp',
+    settings: {
+      kind: 'image',
+      width: 768,
+      height: 768,
+      seed: 100 + index,
+      steps: 4,
+      cfgScale: 1,
+      sampler: 'euler_a',
+      scheduler: 'beta',
+      flowShift: 3,
+      batch,
+      batchIndex: index,
+    } satisfies ImageJobSettings,
+  },
+});
 
 const item = (id: string, over: Partial<MediaItem> = {}): MediaItem => ({
   id,
@@ -184,5 +220,146 @@ describe('formatBytes', () => {
     expect(formatBytes(151_128)).toBe('148 KB');
     expect(formatBytes(523_454)).toBe('511 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+});
+
+describe('featureOf', () => {
+  it('reads the feature off the settings rather than off the file type', () => {
+    expect(featureOf(batchImage('outputs/a/1.png', 'job', 0, 4, '2026-09-11T10:00:00.000Z'))).toBe(
+      'image.generate',
+    );
+  });
+
+  it('leaves an upload with no feature, because no arm made it', () => {
+    const uploaded = item('inputs/frame.png', {
+      meta: { source: 'uploaded', createdAt: '2026-09-11T10:00:00.000Z' },
+    });
+
+    expect(featureOf(uploaded)).toBeNull();
+    expect(sourceOf(uploaded)).toBe('uploaded');
+  });
+
+  it('falls back to the file for a generation recorded before settings were kept', () => {
+    const old = item('outputs/a/clip.mp4', {
+      meta: { source: 'generated', createdAt: '2026-09-01T10:00:00.000Z' },
+    });
+
+    expect(featureOf(old)).toBe('video.generate');
+  });
+
+  it('calls a file with no record untracked', () => {
+    expect(sourceOf(item('outputs/bench/x.mp4'))).toBe('untracked');
+    expect(sourceLabel('untracked')).toBe('Untracked');
+    expect(sourceLabel('image-qwen-edit-sdcpp')).toBe('image-qwen-edit-sdcpp');
+  });
+});
+
+describe('filterMedia', () => {
+  const images = [
+    batchImage('outputs/a/1.png', 'job', 0, 2, '2026-09-11T10:00:00.000Z'),
+    batchImage('outputs/a/2.png', 'job', 1, 2, '2026-09-11T10:00:00.000Z'),
+  ];
+  const clip = item('outputs/a/clip.mp4', {
+    meta: { source: 'generated', createdAt: '2026-09-11T09:00:00.000Z', armId: 'video-ltx25-diffusers' },
+  });
+  const upload = item('inputs/frame.png', {
+    meta: { source: 'uploaded', createdAt: '2026-09-11T08:00:00.000Z' },
+  });
+  const all = [...images, clip, upload];
+
+  it('keeps only what a feature produced', () => {
+    expect(filterMedia(all, { feature: 'image.generate' }).map((entry) => entry.id)).toEqual([
+      'outputs/a/1.png',
+      'outputs/a/2.png',
+    ]);
+    expect(filterMedia(all, { feature: 'video.generate' }).map((entry) => entry.id)).toEqual([
+      'outputs/a/clip.mp4',
+    ]);
+  });
+
+  it('keeps everything when neither filter names something it understands', () => {
+    expect(filterMedia(all, { feature: 'all', source: 'all' })).toHaveLength(4);
+    expect(filterMedia(all, {})).toHaveLength(4);
+  });
+
+  it('filters by arm, and by the two states that are not arms', () => {
+    expect(filterMedia(all, { source: 'video-ltx25-diffusers' }).map((entry) => entry.id)).toEqual([
+      'outputs/a/clip.mp4',
+    ]);
+    expect(filterMedia(all, { source: 'uploaded' }).map((entry) => entry.id)).toEqual(['inputs/frame.png']);
+  });
+
+  it('combines the two, because they answer different questions', () => {
+    expect(filterMedia(all, { feature: 'image.generate', source: 'video-ltx25-diffusers' })).toEqual([]);
+  });
+
+  it('offers only the values actually present, commonest first', () => {
+    expect(facetsOf(all, sourceOf, sourceLabel)).toEqual([
+      { value: 'image-qwen-edit-sdcpp', label: 'image-qwen-edit-sdcpp', count: 2 },
+      { value: 'uploaded', label: 'Uploaded', count: 1 },
+      { value: 'video-ltx25-diffusers', label: 'video-ltx25-diffusers', count: 1 },
+    ]);
+  });
+});
+
+describe('stackMedia', () => {
+  it('collapses a batch into one card, in the order the job wrote it', () => {
+    const entries = stackMedia([
+      batchImage('outputs/a/3.png', 'job-a', 2, 3, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/1.png', 'job-a', 0, 3, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/2.png', 'job-a', 1, 3, '2026-09-11T10:00:00.000Z'),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    const [stack] = entries;
+    expect(stack?.kind).toBe('stack');
+    if (stack?.kind !== 'stack') return;
+    expect(stack.items.map((entry) => entry.name)).toEqual(['1.png', '2.png', '3.png']);
+    expect(stack.cover.name).toBe('1.png');
+  });
+
+  it('holds the batch where its first member was, rather than floating to the top', () => {
+    const entries = stackMedia([
+      item('outputs/a/newer.mp4', { modifiedAt: '2026-09-11T12:00:00.000Z' }),
+      batchImage('outputs/a/1.png', 'job-a', 0, 2, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/2.png', 'job-a', 1, 2, '2026-09-11T10:00:00.000Z'),
+      item('outputs/a/older.mp4', { modifiedAt: '2026-09-11T08:00:00.000Z' }),
+    ]);
+
+    expect(entries.map((entry) => entry.key)).toEqual([
+      'outputs/a/newer.mp4',
+      'outputs/a/job-a',
+      'outputs/a/older.mp4',
+    ]);
+  });
+
+  it('keeps two jobs apart even when they landed in the same folder', () => {
+    const entries = stackMedia([
+      batchImage('outputs/a/1.png', 'job-a', 0, 2, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/2.png', 'job-a', 1, 2, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/3.png', 'job-b', 0, 2, '2026-09-11T11:00:00.000Z'),
+      batchImage('outputs/a/4.png', 'job-b', 1, 2, '2026-09-11T11:00:00.000Z'),
+    ]);
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.key)).toEqual(['outputs/a/job-a', 'outputs/a/job-b']);
+  });
+
+  it('shows a lone survivor of a batch as itself', () => {
+    // The other three were deleted: there is no folder left to open.
+    const entries = stackMedia([batchImage('outputs/a/1.png', 'job-a', 0, 4, '2026-09-11T10:00:00.000Z')]);
+
+    expect(entries).toEqual([
+      { kind: 'item', key: 'outputs/a/1.png', item: expect.objectContaining({ id: 'outputs/a/1.png' }) },
+    ]);
+  });
+
+  it('never stacks jobs that asked for one image each', () => {
+    const entries = stackMedia([
+      batchImage('outputs/a/1.png', 'job-a', 0, 1, '2026-09-11T10:00:00.000Z'),
+      batchImage('outputs/a/2.png', 'job-b', 0, 1, '2026-09-11T10:00:00.000Z'),
+    ]);
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['item', 'item']);
   });
 });

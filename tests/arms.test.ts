@@ -21,8 +21,6 @@ describe('scaffolded arm packages', () => {
     expect(armDirectories).toEqual(
       expect.arrayContaining([
         'text-llamacpp-cu124',
-        'image-sdcpp-v03-cu121',
-        'image-diffusers',
         'image-qwen-edit-sdcpp',
         'video-ltx25-diffusers',
       ]),
@@ -77,14 +75,11 @@ describe('scaffolded arm packages', () => {
   });
 
   // A console offers the arms that declare its job contract. Which arms those
-  // are is a fact about this repository, so it is pinned here: the two image
-  // scaffolds are image arms that cannot run an image job, and a console that
-  // went by modality alone offered one of them.
+  // are is a fact about this repository, so it is pinned here. The text arm
+  // declares nothing because nothing has been built to drive it.
   it.each([
     ['image-qwen-edit-sdcpp', ['image.generate']],
     ['video-ltx25-diffusers', ['video.generate']],
-    ['image-diffusers', []],
-    ['image-sdcpp-v03-cu121', []],
     ['text-llamacpp-cu124', []],
   ])('%s declares the job contracts it can actually serve', (name, expected) => {
     const result = parseArmManifestYaml(readFileSync(path.join(ARMS_DIR, name, 'arm.yaml'), 'utf8'));

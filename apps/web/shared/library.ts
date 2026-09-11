@@ -344,6 +344,163 @@ export function mediaTime(item: MediaItem): number {
   return Date.parse(item.meta?.createdAt ?? item.modifiedAt);
 }
 
+/**
+ * What produced a file, in the studio's own terms.
+ *
+ * Not the same as `kind`: an uploaded photograph is an image but no arm made
+ * it, and saying "image" about both would make the filter that uses this
+ * answer a question nobody asked. `null` means nothing generated this file.
+ */
+export function featureOf(item: MediaItem): ArmFeature | null {
+  const meta = item.meta;
+  if (!meta || meta.source !== 'generated') return null;
+  if (meta.settings) return isImageSettings(meta.settings) ? 'image.generate' : 'video.generate';
+  // Generated before settings were recorded, or by a script: the file itself is
+  // the only evidence left of which console would have made it.
+  return item.kind === 'image' ? 'image.generate' : 'video.generate';
+}
+
+/** The capabilities an arm manifest can declare, as the library sees them. */
+export type ArmFeature = 'image.generate' | 'video.generate';
+
+export const FEATURE_LABELS: Record<ArmFeature, string> = {
+  'image.generate': 'Image generation',
+  'video.generate': 'Video generation',
+};
+
+/**
+ * Who a file is attributed to: an arm id, or one of two states that are not
+ * arms at all. Both of those are worth filtering by, which is why they sit in
+ * the same list rather than being a second control.
+ */
+export function sourceOf(item: MediaItem): string {
+  if (item.meta?.armId) return item.meta.armId;
+  return item.meta ? 'uploaded' : 'untracked';
+}
+
+export function sourceLabel(source: string): string {
+  if (source === 'uploaded') return 'Uploaded';
+  if (source === 'untracked') return 'Untracked';
+  return source;
+}
+
+export interface MediaFacet {
+  value: string;
+  label: string;
+  count: number;
+}
+
+/** The values actually present, so a filter never offers an empty result. */
+export function facetsOf(
+  items: readonly MediaItem[],
+  of: (item: MediaItem) => string | null,
+  label: (value: string) => string,
+): MediaFacet[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const value = of(item);
+    if (value === null) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, label: label(value), count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
+
+export interface MediaFilter {
+  /** An `ArmFeature`, or anything else to mean "no filter". */
+  feature?: string | null;
+  /** An arm id, `uploaded`, `untracked`, or anything else to mean "no filter". */
+  source?: string | null;
+}
+
+export function filterMedia(items: readonly MediaItem[], filter: MediaFilter): MediaItem[] {
+  const feature = filter.feature;
+  const source = filter.source;
+
+  return items.filter((item) => {
+    if (feature === 'image.generate' || feature === 'video.generate') {
+      if (featureOf(item) !== feature) return false;
+    }
+    if (source !== undefined && source !== null && source !== 'all') {
+      if (sourceOf(item) !== source) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * The key that ties one image of a batch to its siblings.
+ *
+ * A batch is one job that wrote several files, so the job id is what they
+ * share. Only asked of images that say they were part of one: a job of one is
+ * a file, and calling it a batch of one would put a folder around a single
+ * picture.
+ */
+export function batchKeyOf(item: MediaItem): string | null {
+  const settings = item.meta?.settings;
+  if (!isImageSettings(settings) || settings.batch <= 1) return null;
+  const jobId = item.meta?.jobId;
+  return jobId ? `${item.group}/${jobId}` : null;
+}
+
+/** One card in the library: a file, or the batch a job wrote in one go. */
+export type MediaEntry =
+  | { kind: 'item'; key: string; item: MediaItem }
+  | { kind: 'stack'; key: string; items: MediaItem[]; cover: MediaItem };
+
+/**
+ * Collapses each batch into a single card, in place.
+ *
+ * The stack takes the position of its newest member, so a batch does not jump
+ * to the top of a folder for having several files in it. Members keep the order
+ * the job made them in -- that is what `batchIndex` is for, and it is the order
+ * the seeds were used. A batch that has lost all but one file is shown as that
+ * file: there is no folder left to open.
+ */
+export function stackMedia(items: readonly MediaItem[]): MediaEntry[] {
+  const stacks = new Map<string, MediaItem[]>();
+  for (const item of items) {
+    const key = batchKeyOf(item);
+    if (key === null) continue;
+    const bucket = stacks.get(key);
+    if (bucket) bucket.push(item);
+    else stacks.set(key, [item]);
+  }
+
+  const emitted = new Set<string>();
+  const entries: MediaEntry[] = [];
+
+  for (const item of items) {
+    const key = batchKeyOf(item);
+    const members = key === null ? undefined : stacks.get(key);
+
+    if (key === null || members === undefined || members.length < 2) {
+      entries.push({ kind: 'item', key: item.id, item });
+      continue;
+    }
+
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+
+    const ordered = [...members].sort((a, b) => batchIndexOf(a) - batchIndexOf(b));
+    entries.push({ kind: 'stack', key, items: ordered, cover: ordered[0] as MediaItem });
+  }
+
+  return entries;
+}
+
+function batchIndexOf(item: MediaItem): number {
+  const settings = item.meta?.settings;
+  return isImageSettings(settings) ? settings.batchIndex : 0;
+}
+
+/** Every file behind a list of cards, stacks flattened back out. */
+export function entryItems(entries: readonly MediaEntry[]): MediaItem[] {
+  return entries.flatMap((entry) => (entry.kind === 'stack' ? entry.items : [entry.item]));
+}
+
 export interface MediaGroup {
   group: string;
   label: string;

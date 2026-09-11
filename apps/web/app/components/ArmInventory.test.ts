@@ -95,26 +95,26 @@ describe('ArmInventory', () => {
 
   it('names the arm that will be evicted before starting another', async () => {
     const wrapper = mountInventory({
-      arms: [arm({ id: 'text-llamacpp', state: 'running' }), arm({ id: 'image-diffusers', modality: 'image' })],
+      arms: [arm({ id: 'text-llamacpp', state: 'running' }), arm({ id: 'image-qwen-edit', modality: 'image' })],
     });
 
-    await wrapper.get('[data-testid="start-image-diffusers"]').trigger('click');
+    await wrapper.get('[data-testid="start-image-qwen-edit"]').trigger('click');
 
     const confirm = wrapper.get('[data-testid="eviction-confirm"]');
     expect(confirm.text()).toContain('text-llamacpp');
-    expect(confirm.text()).toContain('image-diffusers');
+    expect(confirm.text()).toContain('image-qwen-edit');
     expect(wrapper.emitted('start')).toBeUndefined();
 
     await wrapper.get('[data-testid="eviction-confirm-button"]').trigger('click');
-    expect(wrapper.emitted('start')).toEqual([['image-diffusers']]);
+    expect(wrapper.emitted('start')).toEqual([['image-qwen-edit']]);
   });
 
   it('cancels an eviction without starting anything', async () => {
     const wrapper = mountInventory({
-      arms: [arm({ id: 'text-llamacpp', state: 'running' }), arm({ id: 'image-diffusers' })],
+      arms: [arm({ id: 'text-llamacpp', state: 'running' }), arm({ id: 'image-qwen-edit' })],
     });
 
-    await wrapper.get('[data-testid="start-image-diffusers"]').trigger('click');
+    await wrapper.get('[data-testid="start-image-qwen-edit"]').trigger('click');
     await wrapper.get('[data-testid="eviction-cancel-button"]').trigger('click');
 
     expect(wrapper.emitted('start')).toBeUndefined();

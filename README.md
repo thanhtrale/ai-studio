@@ -56,10 +56,8 @@ Each directory under `arms/` with an `arm.yaml` is an arm:
 ```
 arms/
   text-llamacpp-cu124/     arm.yaml  params.schema.json  bin/     <- you place binaries here
-  image-sdcpp-v03-cu121/   arm.yaml  params.schema.json  bin/
-  image-diffusers/         arm.yaml  params.schema.json  .venv/   <- its own interpreter
   image-qwen-edit-sdcpp/   arm.yaml  params.schema.json  bin/  .venv/
-  video-ltx25-diffusers/   arm.yaml  params.schema.json  .venv/
+  video-ltx25-diffusers/   arm.yaml  params.schema.json  .venv/  <- its own interpreter
 ```
 
 `bin/`, `build/` and `.venv/` are git-ignored. Each arm's README says which release to download. Two arms may wrap the same runtime at different versions built against different CUDA toolkits — they resolve their libraries from their own directory and do not interfere.

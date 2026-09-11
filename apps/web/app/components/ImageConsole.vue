@@ -115,9 +115,9 @@ const SCHEDULERS = [
   { value: 'bong_tangent', label: 'bong_tangent' },
 ];
 
-// By capability, not modality: `image-diffusers` is an image arm too, but it
-// is a scaffold with only a health endpoint, and offering it here would hand
-// the user a picker entry whose every job fails.
+// By capability, not modality. Two image arms can be unable to run each
+// other's jobs, and this console once offered a scaffold that had only a
+// health endpoint -- an entry whose every job would have failed.
 const imageArms = computed(() =>
   props.arms.filter((arm) => arm.capabilities.includes('image.generate')),
 );

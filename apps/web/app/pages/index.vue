@@ -137,7 +137,7 @@ const recent = computed(() =>
                   :key="entry.id"
                   class="h-14 w-14 overflow-hidden rounded border border-white/10"
                 >
-                  <MediaThumb :item="entry" />
+                  <MediaThumb :item="entry" kind-badge />
                 </li>
               </ul>
             </div>
