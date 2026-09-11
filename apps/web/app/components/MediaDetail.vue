@@ -211,7 +211,12 @@ const features = computed(() => {
           </div>
           <div class="flex justify-between gap-3">
             <dt class="text-slate-500">Peak VRAM</dt>
-            <dd class="text-slate-300">{{ meta.report.peakVramGib.toFixed(2) }} GiB</dd>
+            <dd class="text-right text-slate-300">
+              {{ meta.report.peakVramGib.toFixed(2) }} GiB
+              <span v-if="meta.report.peakVramScope === 'card'" class="text-slate-500">
+                <br />whole card
+              </span>
+            </dd>
           </div>
           <div v-for="stage in meta.report.stages" :key="stage.name" class="flex justify-between gap-3">
             <dt class="text-slate-500">{{ stage.name }}</dt>

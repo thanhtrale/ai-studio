@@ -11,11 +11,12 @@ lifecycle: resident
 
 resources:
   gpu: exclusive
-  # Estimate, not a measurement: a Q4_K_M Qwen-Image-Edit is ~12 GiB and the
-  # Qwen2.5-VL encoder another ~8 GiB, but --offload-to-cpu keeps only part of
-  # that resident at a time. Correct this once a run has been measured on the
-  # card; the honest figure is whatever `GET /stats` reports mid-job.
-  vramEstimateMb: 13000
+  # Measured, not estimated: four jobs on a 16376 MiB RTX 4080 peaked between
+  # 13640 and 15256 MiB of whole-card use, the top of that range being a
+  # 1024x576 edit with one reference image. This is the whole card rather than
+  # this arm's share -- a GeForce card under Windows will not attribute memory
+  # per process -- so it is the figure the supervisor should budget against.
+  vramEstimateMb: 15300
 
 launch:
   cwd: .
@@ -53,6 +54,10 @@ launch:
     - "{{threads}}"
     - "--model-args"
     - "{{modelArgs}}"
+    - "--max-vram"
+    - "{{maxVram}}"
+    - "--mmap"
+    - "{{mmap}}"
   env:
     PYTHONPATH: ./src
     PYTHONUNBUFFERED: "1"

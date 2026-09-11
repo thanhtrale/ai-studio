@@ -45,14 +45,34 @@ class ArmState:
         # One timeline per arm, reset per job: the log reader writes to it from
         # its own thread for as long as the child lives.
         self.progress = JobProgress(vram_gib=self.vram_gib)
+        # Decided once, when there is a child to ask about. Until then there is
+        # nothing to measure and no way to know what kind of answer exists.
+        self.vram_scope: vram.Scope | None = None
         self.server = SdServer(config, self.progress)
         # One generation at a time. The child would queue a second job itself,
         # but then two jobs would share one timeline and neither would read right.
         self._gpu = threading.Lock()
 
     def vram_gib(self) -> float | None:
+        """One reading, of whatever this machine is able to report.
+
+        A GeForce card under Windows will not attribute memory to a process, so
+        on this machine the honest answer is a whole-card figure -- and the
+        scope travels with every number so nothing reads it as this arm's own
+        share. See `vram.py`.
+        """
         pid = self.server.pid
-        return vram.used_gib({pid}) if pid is not None else None
+        if pid is None:
+            return None
+
+        if self.vram_scope is None:
+            self.vram_scope = vram.probe(pid)
+
+        if self.vram_scope == "process":
+            return vram.used_gib({pid})
+        if self.vram_scope == "card":
+            return vram.card_gib()
+        return None
 
     @property
     def loaded(self) -> bool:
@@ -74,8 +94,14 @@ class ArmState:
                 with self.progress.step("start", "Start sd-server", str(self.config.diffusion_model.name)):
                     self.server.start()
                 print(f"[{ARM_ID}] sd-server up on port {self.server.port}", flush=True)
+                # One reading straight away, so the first job's chart starts at
+                # the load rather than at the sampler thread's next tick.
+                self.progress.sample_vram()
 
             report = generate(self.server, job, self.progress)
+            # After the job, not before: the scope is discovered by taking a
+            # reading, and the first reading happens once the child is up.
+            report.vram_scope = self.vram_scope or "unavailable"
             self.progress.finish()
         except Exception as error:
             self.progress.fail(f"{type(error).__name__}: {error}")
@@ -85,7 +111,7 @@ class ArmState:
 
         print(
             f"[{ARM_ID}] wrote {len(report.images)} image(s) in {report.seconds_total:.1f}s "
-            f"(peak vram {report.peak_vram_reserved_gib:.2f} GiB)",
+            f"(peak vram {report.peak_vram_gib:.2f} GiB, scope {report.vram_scope})",
             flush=True,
         )
         return asdict(report)
@@ -127,6 +153,7 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                         "pid": pid,
                         "port": state.server.port,
                         "vramGib": state.vram_gib(),
+                        "vramScope": state.vram_scope,
                         "tail": state.server.tail().splitlines()[-10:],
                     },
                 )

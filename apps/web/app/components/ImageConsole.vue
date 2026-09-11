@@ -61,16 +61,38 @@ const MAX_REFERENCES = 4;
 const BATCH_PRESETS = [1, 2, 4, 8];
 
 /**
- * Samplers and schedulers the arm will pass straight through to the child.
+ * Why a peak might not be this arm's own.
  *
- * A short curated list rather than everything stable-diffusion.cpp compiles:
- * the arm validates the *shape* of a name so a new one needs no change there,
- * but a console offering twenty untested samplers is not a kindness.
+ * A GeForce card under Windows runs in WDDM mode, where the display driver owns
+ * the allocations and nvidia-smi answers `[N/A]` for every process. The arm
+ * then measures the whole card and says so rather than reporting a figure that
+ * looks like its own share.
+ */
+const VRAM_SCOPE: Record<string, string> = {
+  process: "this arm's child process",
+  card: 'the whole card — this driver will not attribute memory per process',
+  unavailable: 'nothing — nvidia-smi did not answer',
+};
+
+/**
+ * Samplers and schedulers the arm passes straight through to the child.
+ *
+ * Spelled exactly as `sd-server -h` spells them, and a curated subset rather
+ * than all twenty-one: the arm validates the *shape* of a name, so a build that
+ * adds one needs no change there, but a console offering every sampler it can
+ * compile is not a kindness.
+ *
+ * The empty value means "say nothing", which is not the same as picking one:
+ * upstream documents the sampler as model-specific and the scheduler as a
+ * model default, and a console that always sent a value would be overriding a
+ * choice the checkpoint shipped with.
  */
 const SAMPLERS = [
-  { value: 'euler', label: 'euler — upstream default for Qwen edit' },
+  { value: 'euler', label: 'euler — what upstream uses for Qwen edit' },
+  { value: '', label: 'auto — the model’s own' },
   { value: 'euler_a', label: 'euler_a — ancestral' },
   { value: 'dpm++2m', label: 'dpm++2m' },
+  { value: 'dpm++2s_a', label: 'dpm++2s_a' },
   { value: 'heun', label: 'heun' },
   { value: 'ipndm', label: 'ipndm' },
   { value: 'res_multistep', label: 'res_multistep' },
@@ -78,13 +100,16 @@ const SAMPLERS = [
 ];
 
 const SCHEDULERS = [
-  { value: 'discrete', label: 'discrete' },
+  { value: '', label: 'auto — the model’s own' },
+  { value: 'discrete', label: 'discrete (alias: normal)' },
   { value: 'beta', label: 'beta' },
   { value: 'karras', label: 'karras' },
   { value: 'exponential', label: 'exponential' },
   { value: 'sgm_uniform', label: 'sgm_uniform' },
   { value: 'simple', label: 'simple' },
   { value: 'smoothstep', label: 'smoothstep' },
+  { value: 'kl_optimal', label: 'kl_optimal' },
+  { value: 'bong_tangent', label: 'bong_tangent' },
 ];
 
 const imageArms = computed(() =>
@@ -132,10 +157,13 @@ const aspect = ref<string>('1:1');
 const megapixels = ref(1);
 const width = ref(1024);
 const height = ref(1024);
-const steps = ref(4);
-const cfgScale = ref(1);
+// Upstream's own numbers for Qwen-Image-Edit: 20 steps is the child's
+// default, and its documented examples all pass --cfg-scale 2.5 and
+// --flow-shift 3. A distilled "rapid" merge wants 4 steps at CFG 1 instead.
+const steps = ref(20);
+const cfgScale = ref(2.5);
 const sampler = ref('euler');
-const scheduler = ref('discrete');
+const scheduler = ref('');
 const flowShift = ref(3);
 const seed = ref('');
 const batch = ref(1);
@@ -515,7 +543,7 @@ async function generate(): Promise<void> {
           />
           <template #hint>
             Only does something above CFG 1.0 — at 1.0 the model is unguided and there is nothing to steer
-            away from.
+            away from, which is the case on a distilled “rapid” merge.
           </template>
         </UiField>
 
@@ -559,7 +587,12 @@ async function generate(): Promise<void> {
             <span>{{ report.images.length }} file{{ report.images.length === 1 ? '' : 's' }}</span>
             <span>{{ formatBytes(report.images.reduce((sum, one) => sum + one.out_bytes, 0)) }}</span>
             <span>{{ report.steps }} step</span>
-            <span>peak {{ report.peak_vram_reserved_gib.toFixed(2) }} GiB</span>
+            <span :title="VRAM_SCOPE[report.vram_scope]">
+              peak {{ report.peak_vram_gib.toFixed(2) }} GiB
+              <span v-if="report.vram_scope !== 'process'" class="text-slate-500">
+                ({{ report.vram_scope === 'card' ? 'whole card' : 'unmeasured' }})
+              </span>
+            </span>
             <NuxtLink
               v-if="results[0]"
               :to="{ path: '/library', query: { folder: results[0].group, item: results[0].id } }"
@@ -582,8 +615,9 @@ async function generate(): Promise<void> {
             between the two meters. A job's own steps appear here once one is submitted.
           </p>
           <p class="text-xs">
-            This arm's own meter comes from nvidia-smi's per-process accounting rather than from torch:
-            the weights live in a child process written in C++.
+            There is no torch in this arm to ask — the weights live in a child process written in C++ — so
+            its meter is nvidia-smi's. On a GeForce card under Windows that means a whole-card figure, and
+            the two lines will sit on top of each other: the driver will not attribute memory per process.
           </p>
         </div>
       </aside>

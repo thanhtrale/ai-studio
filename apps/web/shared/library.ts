@@ -156,6 +156,13 @@ export interface ReportSummary {
   secondsTotal: number;
   steps: number;
   peakVramGib: number;
+  /**
+   * What `peakVramGib` measured: this arm's own share, or the whole card.
+   *
+   * Absent on records from an arm that only reports its own share, which is
+   * the assumption a reader should make when it is missing.
+   */
+  peakVramScope?: 'process' | 'card' | 'unavailable';
   stages: { name: string; seconds: number }[];
 }
 

@@ -121,7 +121,8 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
         report: {
           secondsTotal: report.seconds_total,
           steps: report.steps,
-          peakVramGib: report.peak_vram_reserved_gib,
+          peakVramGib: report.peak_vram_gib,
+          ...(report.vram_scope ? { peakVramScope: report.vram_scope } : {}),
           stages: report.stages.map((entry) => ({ name: entry.name, seconds: entry.seconds })),
         },
       });

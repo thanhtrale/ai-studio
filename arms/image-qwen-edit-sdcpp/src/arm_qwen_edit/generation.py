@@ -51,12 +51,16 @@ class Job:
     height: int
     steps: int
     cfg_scale: float
-    sampler: str
-    scheduler: str
-    flow_shift: float
     seed: int
     batch: int
     strength: float
+    # None means "let the child decide". `sd-server -h` documents the sampler
+    # default as model-specific and the scheduler and flow shift as auto, and a
+    # console that always sent a value would be overriding a choice the model
+    # shipped with rather than making one.
+    sampler: str | None = None
+    scheduler: str | None = None
+    flow_shift: float | None = None
     references: list[Path] = field(default_factory=list)
 
 
@@ -77,7 +81,11 @@ class GenerationReport:
     width: int
     height: int
     images: list[ImageOut]
-    peak_vram_reserved_gib: float
+    peak_vram_gib: float
+    #: What `peak_vram_gib` is a measurement *of*: "process", "card", or
+    #: "unavailable". Not cosmetic -- a whole-card peak filed as this arm's own
+    #: would overstate it by whatever else was on the GPU.
+    vram_scope: str
     stages: list[dict[str, Any]]
     prompt_used: str | None = None
 
@@ -120,8 +128,11 @@ def _float(body: dict[str, Any], key: str, default: float, low: float, high: flo
     return number
 
 
-def _name(body: dict[str, Any], key: str, default: str) -> str:
-    value = body.get(key, default) or default
+def _name(body: dict[str, Any], key: str) -> str | None:
+    """A sampler or scheduler name, or None for the model's own default."""
+    value = body.get(key)
+    if value is None or value == "":
+        return None
     if not isinstance(value, str) or not NAME.match(value):
         raise JobError(f"{key} is not a sampler or scheduler name")
     return value
@@ -170,11 +181,13 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
         out_path=out_path,
         width=_edge(body, "width", 1024),
         height=_edge(body, "height", 1024),
-        steps=_int(body, "steps", 4, 1, MAX_STEPS),
-        cfg_scale=_float(body, "cfgScale", 1.0, 0.0, 30.0),
-        sampler=_name(body, "sampler", "euler"),
-        scheduler=_name(body, "scheduler", "discrete"),
-        flow_shift=_float(body, "flowShift", 3.0, 0.0, 10.0),
+        steps=_int(body, "steps", 20, 1, MAX_STEPS),
+        cfg_scale=_float(body, "cfgScale", 2.5, 0.0, 30.0),
+        sampler=_name(body, "sampler"),
+        scheduler=_name(body, "scheduler"),
+        flow_shift=(
+            None if body.get("flowShift") is None else _float(body, "flowShift", 3.0, 0.0, 10.0)
+        ),
         seed=seed,
         batch=_int(body, "batch", 1, 1, MAX_BATCH),
         strength=_float(body, "strength", 0.75, 0.0, 1.0),
@@ -194,6 +207,19 @@ def request_body(job: Job) -> dict[str, Any]:
     the child is never told a filesystem location this arm has not already
     read from.
     """
+    sample_params: dict[str, Any] = {
+        "sample_steps": job.steps,
+        "guidance": {"txt_cfg": job.cfg_scale},
+    }
+    # Omitted rather than sent as null: an absent key leaves the child on its
+    # model-specific default, and a null would be a value it has to interpret.
+    if job.sampler is not None:
+        sample_params["sample_method"] = job.sampler
+    if job.scheduler is not None:
+        sample_params["scheduler"] = job.scheduler
+    if job.flow_shift is not None:
+        sample_params["flow_shift"] = job.flow_shift
+
     return {
         "prompt": job.prompt,
         "negative_prompt": job.negative_prompt,
@@ -204,13 +230,7 @@ def request_body(job: Job) -> dict[str, Any]:
         "strength": job.strength,
         "ref_images": [_data_url(path) for path in job.references],
         "output_format": OUTPUT_FORMAT,
-        "sample_params": {
-            "sample_method": job.sampler,
-            "sample_steps": job.steps,
-            "scheduler": job.scheduler,
-            "flow_shift": job.flow_shift,
-            "guidance": {"txt_cfg": job.cfg_scale},
-        },
+        "sample_params": sample_params,
     }
 
 
@@ -297,6 +317,12 @@ def generate(server: SdServer, job: Job, progress: JobProgress) -> GenerationRep
                 )
             )
 
+        # The meter counts images as they *start*, so the last one leaves it one
+        # short. A finished job shows all of them finished.
+        if job.batch > 1:
+            progress.meter("batch", "Images", len(written))
+            progress.advance("batch", len(written), len(written))
+
         reported.detail(f"{detail} · {len(written)} file{'' if len(written) == 1 else 's'}")
 
     return GenerationReport(
@@ -307,7 +333,11 @@ def generate(server: SdServer, job: Job, progress: JobProgress) -> GenerationRep
         width=job.width,
         height=job.height,
         images=written,
-        peak_vram_reserved_gib=progress.peak_gib,
+        peak_vram_gib=progress.peak_gib,
+        # Filled in by the caller once the job is over. It cannot be known when
+        # the job starts: what kind of reading this machine gives is discovered
+        # by taking one, and the first is taken after the child exists.
+        vram_scope="unavailable",
         stages=_stages(progress),
     )
 

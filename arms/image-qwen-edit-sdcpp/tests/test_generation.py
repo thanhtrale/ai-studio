@@ -84,6 +84,20 @@ def test_numeric_bounds_are_enforced(tmp_path: Path) -> None:
             parse_job({"prompt": "a", "outPath": "a.png", field: value}, out_dir, in_dir)
 
 
+def test_an_unset_sampler_or_scheduler_is_left_to_the_model(tmp_path: Path) -> None:
+    out_dir, in_dir = roots(tmp_path)
+    job = parse_job({"prompt": "a", "outPath": "a.png"}, out_dir, in_dir)
+
+    assert (job.sampler, job.scheduler, job.flow_shift) == (None, None, None)
+    params = request_body(job)["sample_params"]
+    # Absent, not null: upstream documents both as model-specific defaults, and
+    # a null is a value the child would have to interpret.
+    assert "sample_method" not in params
+    assert "scheduler" not in params
+    assert "flow_shift" not in params
+    assert params["sample_steps"] == 20
+
+
 def test_a_sampler_name_is_a_name(tmp_path: Path) -> None:
     out_dir, in_dir = roots(tmp_path)
     with pytest.raises(JobError, match="sampler"):

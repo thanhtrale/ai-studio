@@ -74,7 +74,11 @@ def test_a_single_image_run(arm: ArmState, tmp_path: Path) -> None:
     # The seed the child actually used, read out of its log -- which is the
     # only place it exists when the request asked for -1.
     assert report["seed"] == 42
-    assert report["steps"] == 4
+    assert report["steps"] == 20  # the child's own default, unchanged by the job
+    # Every VRAM figure says what it measured. A whole-card peak filed as this
+    # arm's own share would overstate it by whatever else was on the GPU.
+    assert report["vram_scope"] in {"process", "card", "unavailable"}
+    assert "peak_vram_gib" in report
 
 
 def test_a_batch_writes_one_file_per_image_with_its_own_seed(arm: ArmState, tmp_path: Path) -> None:
@@ -86,6 +90,11 @@ def test_a_batch_writes_one_file_per_image_with_its_own_seed(arm: ArmState, tmp_
     assert sorted(path.name for path in folder.iterdir()) == ["b-2.png", "b-3.png", "b.png"]
     assert [image["seed"] for image in report["images"]] == [100, 101, 102]
     assert [image["index"] for image in report["images"]] == [0, 1, 2]
+
+    # The log counts images as they start, so the meter would otherwise stop at
+    # 2 of 3 on a finished job -- which reads as a batch that lost one.
+    meters = {meter["key"]: meter for meter in arm.progress.snapshot()["meters"]}
+    assert (meters["batch"]["done"], meters["batch"]["total"]) == (3, 3)
 
 
 def test_the_timeline_carries_the_child_log(arm: ArmState) -> None:

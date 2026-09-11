@@ -45,6 +45,10 @@ def main() -> None:
     parser.add_argument("--flash-attention", default="true", choices=("true", "false"))
     parser.add_argument("--threads", type=int, default=-1)
     parser.add_argument("--model-args", default="", help="passed through to the child verbatim")
+    parser.add_argument(
+        "--max-vram", default="", help="GiB budget for managed weights, per the child's --max-vram"
+    )
+    parser.add_argument("--mmap", default="false", choices=("true", "false"))
     args = parser.parse_args()
 
     if args.host not in LOOPBACK:
@@ -67,6 +71,8 @@ def main() -> None:
         flash_attention=_flag(args.flash_attention),
         threads=args.threads,
         model_args=args.model_args,
+        max_vram=args.max_vram,
+        mmap=_flag(args.mmap),
     )
 
     out_dir = Path(args.out_dir)

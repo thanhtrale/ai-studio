@@ -99,7 +99,17 @@ export interface ArmImageReport {
   width: number;
   height: number;
   images: ArmImageOut[];
-  peak_vram_reserved_gib: number;
+  peak_vram_gib: number;
+  /**
+   * What `peak_vram_gib` measured.
+   *
+   * `process` is this arm's own share, the same thing the video arm reports.
+   * `card` is the whole GPU, which is all a GeForce card under Windows will
+   * say -- the driver owns the allocations and reports `[N/A]` per process.
+   * Carried rather than assumed, because filing a whole-card peak as one arm's
+   * share overstates it by whatever else was on the card.
+   */
+  vram_scope: 'process' | 'card' | 'unavailable';
   stages: { name: string; seconds: number }[];
   prompt_used?: string | null;
 }

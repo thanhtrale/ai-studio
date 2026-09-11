@@ -45,7 +45,19 @@
       "type": "string",
       "enum": ["true", "false"],
       "default": "true",
-      "description": "Keep weights in host RAM and move them to the card as they are needed. On a 16 GiB card this is what makes a 12 GiB transformer plus an 8 GiB text encoder fit at all; turn it off only if both fit outright, where it costs nothing to leave them there."
+      "description": "Keep weights in host RAM and move them to the card as they are needed. Note that the child's own --auto-fit is on by default and already places weights across GPU, RAM and disk by what fits; this forces the RAM step. On a 16 GiB card holding a 13 GiB transformer beside a 16 GiB text encoder, something has to give either way."
+    },
+    "maxVram": {
+      "type": "string",
+      "maxLength": 64,
+      "default": "",
+      "description": "The child's --max-vram: a GiB budget for managed weights and runner buffers, either a single number or per-device (\"cuda0=12\"). Empty lets auto-fit use live free VRAM with no explicit budget, which is the right default here because the studio's broker guarantees nothing else holds the card. Set it if something outside the studio does."
+    },
+    "mmap": {
+      "type": "string",
+      "enum": ["false", "true"],
+      "default": "false",
+      "description": "Memory-map the weight file instead of reading it. This is the trick that makes the video arm's 36 GiB transformer 'load' in 0.6 s -- the pages are faulted in as they are touched -- so it is likely to help here too. Off until it has been measured on this card, because a mapped file behaves differently under memory pressure than a read one."
     },
     "flashAttention": {
       "type": "string",

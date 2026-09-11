@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .jobobject import KillOnClose
 from .logscan import parse_line, phase_label, split_stream
 from .progress import JobProgress
 
@@ -49,6 +50,15 @@ class LoadConfig:
     flash_attention: bool = True
     threads: int = -1
     model_args: str = ""
+    # `--max-vram`: a GiB budget for managed weights and runner buffers. Empty
+    # leaves the child's own auto-fit to use live free VRAM without a budget,
+    # which is right when nothing else is on the card -- and the studio's broker
+    # makes sure nothing else is.
+    max_vram: str = ""
+    # `--mmap`: map the weight file instead of reading it. The same trick that
+    # makes the video arm's 36 GiB transformer "load" in 0.6 s, so it is offered
+    # here -- but off by default until it has been measured on this card.
+    mmap: bool = False
     # A 20B transformer off NVMe is minutes, not seconds, and a first run on a
     # cold file cache is the slow case this has to survive.
     ready_timeout_seconds: float = 900.0
@@ -83,6 +93,10 @@ class LoadConfig:
             args += ["--threads", str(self.threads)]
         if self.model_args:
             args += ["--model-args", self.model_args]
+        if self.max_vram:
+            args += ["--max-vram", self.max_vram]
+        if self.mmap:
+            args.append("--mmap")
         if self.verbose:
             # Without this the child says nothing between accepting a job and
             # finishing it, and the timeline has nothing to show.
@@ -130,6 +144,9 @@ class SdServer:
         self._tail: list[str] = []
         self._lock = threading.Lock()
         self.scan = JobScan()
+        # Kills the child if this process is terminated without unwinding,
+        # which is exactly how the supervisor stops an arm it has to stop hard.
+        self._job = KillOnClose()
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -166,6 +183,13 @@ class SdServer:
             )
         except OSError as error:
             raise ChildFailed(f"could not start {self.config.server_binary}: {error}") from error
+
+        try:
+            self._job.adopt(self._process)
+        except OSError as error:
+            # Worth saying out loud rather than swallowing: without the job
+            # object, a hard kill of this arm leaves the child on the card.
+            print(f"[arm] warning: could not put the child in a job object ({error})", flush=True)
 
         self._reader = threading.Thread(target=self._read_log, daemon=True)
         self._reader.start()
