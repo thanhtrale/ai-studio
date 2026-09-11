@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Qwen-Image-Edit (stable-diffusion.cpp) start parameters",
+  "description": "Start-time configuration only. These values are substituted into the launch command and decide how the child process reads its weights, so changing any of them restarts the arm. Per-generation values (prompt, size, steps, seed, batch, reference images) are sent to the running arm as a job and are validated by the arm itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "diffusionModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen-image-edit-2511/qwen-image-edit-2511-Q4_K_M.gguf",
+      "description": "Qwen-Image-Edit transformer in GGUF, relative to the managed storage directory. The quantisation is the main VRAM lever: Q4_K_M is around 12 GiB, Q8_0 roughly double that and will not stay resident on a 16 GiB card."
+    },
+    "vae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen-image-edit-2511/qwen_image_vae.safetensors",
+      "description": "Qwen-Image VAE, relative to the managed storage directory. Shared by every Qwen-Image-Edit release; it is not quantised."
+    },
+    "llm": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen-image-edit-2511/qwen_2.5_vl_7b.safetensors",
+      "description": "Qwen2.5-VL text encoder, relative to the managed storage directory. May be a .safetensors file or a GGUF; a GGUF needs llmVision alongside it."
+    },
+    "llmVision": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen-image-edit-2511/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+      "description": "Vision tower for a GGUF text encoder (an mmproj file), relative to the managed storage directory. Ignored when the file is not there, which is the normal case with the .safetensors encoder: it carries its own. A launch placeholder cannot be omitted conditionally, so this always has a value and the arm decides whether it applies."
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "outputs",
+      "description": "Root for generated files, relative to the managed storage directory. Every job output path is resolved inside it and anything that escapes is rejected by the arm."
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "inputs",
+      "description": "Root that a job's reference images are resolved inside, relative to the managed storage directory. Separate from outputDir because a job supplies these paths and the arm reads them."
+    },
+    "offloadToCpu": {
+      "type": "string",
+      "enum": ["true", "false"],
+      "default": "true",
+      "description": "Keep weights in host RAM and move them to the card as they are needed. On a 16 GiB card this is what makes a 12 GiB transformer plus an 8 GiB text encoder fit at all; turn it off only if both fit outright, where it costs nothing to leave them there."
+    },
+    "flashAttention": {
+      "type": "string",
+      "enum": ["true", "false"],
+      "default": "true",
+      "description": "The child's --diffusion-fa. Flash attention in the diffusion model, which cuts the attention activation peak; upstream's own Qwen-Image-Edit examples all enable it."
+    },
+    "threads": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 128,
+      "default": -1,
+      "description": "CPU threads for the parts that run on the host. -1 lets the child choose, which is the physical core count."
+    },
+    "modelArgs": {
+      "type": "string",
+      "maxLength": 512,
+      "default": "qwen_image_zero_cond_t=true",
+      "description": "Passed to the child's --model-args verbatim. The default is what upstream requires for Qwen-Image-Edit 2511 specifically; on 2509 or the original Edit release, clear it."
+    }
+  }
+}

@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { isVideoSettings } from '#shared/library';
+
 import { allocateUploadId, describeMedia, listMedia, mediaPath, readMeta, writeMeta } from './library';
 import { RelayError } from './supervisor';
 
@@ -121,7 +123,9 @@ describe('readMeta', () => {
     const meta = await readMeta(storage, 'outputs/2026-09-11/a.mp4');
 
     expect(meta?.settings?.seed).toBe(7);
-    expect(meta?.settings?.spatialUpsample).toBe(true);
+    // A record written before there was a second modality carries no `kind`,
+    // and still has to read back as the video settings it is.
+    expect(isVideoSettings(meta?.settings) && meta?.settings.spatialUpsample).toBe(true);
   });
 
   it('treats a record it cannot parse as no record at all', async () => {

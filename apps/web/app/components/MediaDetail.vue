@@ -8,7 +8,7 @@
  */
 import { computed, ref, watch } from 'vue';
 
-import { formatBytes, type MediaItem } from '#shared/library';
+import { formatBytes, isImageSettings, isVideoSettings, type MediaItem } from '#shared/library';
 
 import MediaThumb from './MediaThumb.vue';
 import UiBadge from './ui/Badge.vue';
@@ -34,16 +34,31 @@ function onVideo(event: Event): void {
 const meta = computed(() => props.item.meta);
 const settings = computed(() => meta.value?.settings);
 
+/**
+ * The two shapes a record's settings can have.
+ *
+ * Narrowed here rather than in the template so the markup reads as two
+ * alternatives rather than a field-by-field guard, and so a record written
+ * before there was a second modality still resolves as the video one.
+ */
+const video = computed(() => (isVideoSettings(settings.value) ? settings.value : null));
+const image = computed(() => (isImageSettings(settings.value) ? settings.value : null));
+
+/** Where "use these settings" goes: the console that can actually take them. */
+const consolePath = computed(() => (image.value ? '/generate/image' : '/generate/video'));
+
 const when = (iso: string): string =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 /** The knobs that were on, named the way the console names them. */
 const features = computed(() => {
   const on: string[] = [];
-  if (settings.value?.enhancePrompt) on.push('prompt enhancer');
-  if (settings.value?.spatialUpsample) on.push('spatial ×2');
-  if (settings.value?.temporalUpsample) on.push('temporal ×2');
-  if (meta.value?.referenceId) on.push('image-to-video');
+  if (video.value?.enhancePrompt) on.push('prompt enhancer');
+  if (video.value?.spatialUpsample) on.push('spatial ×2');
+  if (video.value?.temporalUpsample) on.push('temporal ×2');
+  if (image.value && image.value.batch > 1) on.push(`batch ${image.value.batchIndex + 1}/${image.value.batch}`);
+  const references = meta.value?.referenceIds?.length ?? (meta.value?.referenceId ? 1 : 0);
+  if (references > 0) on.push(props.item.kind === 'video' ? 'image-to-video' : `${references} reference`);
   return on;
 });
 </script>
@@ -103,7 +118,10 @@ const features = computed(() => {
             <span v-if="measured.seconds">&middot; {{ measured.seconds.toFixed(2) }}s</span>
           </dd>
         </div>
-        <div v-if="item.meta?.output" class="flex justify-between gap-3">
+        <div
+          v-if="item.meta?.output?.numFrames && item.meta.output.fps"
+          class="flex justify-between gap-3"
+        >
           <dt class="text-slate-500">Frames</dt>
           <dd class="text-slate-300">
             {{ item.meta.output.numFrames }} &middot; {{ Math.round(item.meta.output.fps) }} fps
@@ -159,8 +177,15 @@ const features = computed(() => {
           <div class="flex justify-between gap-3">
             <dt class="text-slate-500">Requested</dt>
             <dd class="text-slate-300">
-              {{ settings.width }}&#215;{{ settings.height }} &middot; {{ settings.numFrames }}f &middot;
-              {{ settings.frameRate }} fps
+              {{ settings.width }}&#215;{{ settings.height }}
+              <span v-if="video">&middot; {{ video.numFrames }}f &middot; {{ video.frameRate }} fps</span>
+            </dd>
+          </div>
+          <div v-if="image" class="flex justify-between gap-3">
+            <dt class="text-slate-500">Sampling</dt>
+            <dd class="text-right text-slate-300">
+              {{ image.steps }} step &middot; cfg {{ image.cfgScale }}<br />
+              {{ image.sampler }} &middot; {{ image.scheduler }} &middot; shift {{ image.flowShift }}
             </dd>
           </div>
           <div v-if="settings.aspect" class="flex justify-between gap-3">
@@ -198,15 +223,17 @@ const features = computed(() => {
 
     <div class="mt-4 flex shrink-0 flex-wrap gap-2 border-t border-white/10 pt-4">
       <UiButton size="sm" variant="primary" @click="emit('preview', item)">Preview</UiButton>
-      <NuxtLink v-if="settings" :to="{ path: '/generate/video', query: { from: item.id } }">
+      <NuxtLink v-if="settings" :to="{ path: consolePath, query: { from: item.id } }">
         <UiButton size="sm">Use these settings</UiButton>
       </NuxtLink>
-      <NuxtLink
-        v-else-if="item.kind === 'image'"
-        :to="{ path: '/generate/video', query: { reference: item.id } }"
-      >
-        <UiButton size="sm">Animate this image</UiButton>
-      </NuxtLink>
+      <template v-if="item.kind === 'image'">
+        <NuxtLink :to="{ path: '/generate/image', query: { reference: item.id } }">
+          <UiButton size="sm">Edit this image</UiButton>
+        </NuxtLink>
+        <NuxtLink :to="{ path: '/generate/video', query: { reference: item.id } }">
+          <UiButton size="sm">Animate this image</UiButton>
+        </NuxtLink>
+      </template>
     </div>
   </div>
 </template>

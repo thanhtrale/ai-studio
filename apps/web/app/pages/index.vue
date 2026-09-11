@@ -43,9 +43,10 @@ const FUNCTIONS: StudioFunction[] = [
   {
     key: 'image',
     title: 'Image generation',
-    blurb: 'Diffusers and stable-diffusion.cpp arms are scaffolded, but neither has a runtime yet.',
+    blurb:
+      'Qwen-Image-Edit on stable-diffusion.cpp. Text-to-image, or up to four reference images composed into one edit, with a batch that writes every attempt to the library separately.',
     modality: 'image',
-    to: null,
+    to: '/generate/image',
     glyph: '▣',
   },
   {

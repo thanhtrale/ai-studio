@@ -21,6 +21,9 @@ export interface Frame {
   ratio: number;
 }
 
+/** No model here is worth asking for a frame smaller than this. */
+const MIN_EDGE = 256;
+
 const snap = (value: number, multiple: number, min: number): number =>
   Math.max(min, Math.round(value / multiple) * multiple);
 
@@ -40,16 +43,28 @@ export function aspectRatio(aspect: Aspect): number {
  * is the wrong frame -- the model is being handed a first frame it then has to
  * letterbox or stretch.
  */
-export function frameForRatio(ratio: number, megapixels: number): Frame {
+export function frameForRatio(ratio: number, megapixels: number, multiple = SPATIAL_MULTIPLE): Frame {
   const safe = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
   const budget = Math.max(0.05, megapixels) * 1_000_000;
-  const height = snap(Math.sqrt(budget / safe), SPATIAL_MULTIPLE, 256);
-  const width = snap(height * safe, SPATIAL_MULTIPLE, 256);
+  const height = snap(Math.sqrt(budget / safe), multiple, MIN_EDGE);
+  const width = snap(height * safe, multiple, MIN_EDGE);
   return { width, height, megapixels: (width * height) / 1_000_000, ratio: width / height };
 }
 
 export function resolveFrame(aspect: Aspect, megapixels: number): Frame {
   return frameForRatio(aspectRatio(aspect), megapixels);
+}
+
+/**
+ * Qwen-Image works in 16-pixel blocks -- an 8x VAE with a 2x patch embed on
+ * top -- rather than the video model's 32. Snapping to 32 anyway would quietly
+ * refuse sizes the model accepts, 1360 among them, which is the height of a
+ * 3:4 frame at one megapixel.
+ */
+export const IMAGE_MULTIPLE = 16;
+
+export function resolveImageFrame(ratio: number, megapixels: number): Frame {
+  return frameForRatio(ratio, megapixels, IMAGE_MULTIPLE);
 }
 
 /** The select value standing for "whatever the reference image is". */

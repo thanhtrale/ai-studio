@@ -15,6 +15,7 @@ import UiDrawer from '../components/ui/Drawer.vue';
 
 const NAV = [
   { to: '/', label: 'Home' },
+  { to: '/generate/image', label: 'Image' },
   { to: '/generate/video', label: 'Video' },
   { to: '/library', label: 'Library' },
 ] as const;

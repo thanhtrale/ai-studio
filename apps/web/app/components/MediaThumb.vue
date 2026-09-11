@@ -35,7 +35,7 @@ withDefaults(defineProps<{ item: MediaItem; fit?: 'cover' | 'contain' }>(), { fi
       <span
         class="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-slate-200"
       >
-        {{ item.meta?.output ? `${item.meta.output.seconds.toFixed(1)}s` : 'video' }}
+        {{ item.meta?.output?.seconds === undefined ? 'video' : `${item.meta.output.seconds.toFixed(1)}s` }}
       </span>
     </template>
   </div>

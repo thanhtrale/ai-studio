@@ -17,7 +17,13 @@ import type { ArmSummary } from '@ai-studio/arm-contract';
 
 import type { ArmGenerationReport, GenerateRequest, GenerateResponse } from '#shared/generate';
 import { ratioLabel } from '#shared/image-size';
-import { formatBytes, type JobSettings, type MediaItem, type MediaMeta } from '#shared/library';
+import {
+  formatBytes,
+  isVideoSettings,
+  type MediaItem,
+  type MediaMeta,
+  type VideoJobSettings,
+} from '#shared/library';
 
 import {
   ASPECTS,
@@ -227,7 +233,9 @@ function restoreFrom(meta: MediaMeta): void {
   referenceId.value = meta.referenceId ?? null;
   const previousOffload = meta.armParams?.['offload'];
   if (typeof previousOffload === 'string') offload.value = previousOffload;
-  if (!settings) return;
+  // An image record can reach this page through a hand-edited link. Its
+  // prompt and reference still apply; none of its sampling settings do.
+  if (!isVideoSettings(settings)) return;
 
   const known = [REFERENCE_ASPECT, ...ASPECTS] as readonly string[];
   if (settings.aspect && known.includes(settings.aspect)) aspect.value = settings.aspect;
@@ -272,7 +280,8 @@ async function generate(): Promise<void> {
   const typed = seed.value.trim();
   const chosen = typed === '' ? -1 : Number(typed);
 
-  const settings: JobSettings = {
+  const settings: VideoJobSettings = {
+    kind: 'video',
     aspect: aspect.value,
     megapixels: megapixels.value,
     seconds: seconds.value,

@@ -1,0 +1,67 @@
+id: image-qwen-edit-sdcpp
+name: Qwen-Image-Edit 2511 (stable-diffusion.cpp)
+modality: image
+protocol: native
+# Resident, even though stable-diffusion.cpp is best known as a one-shot CLI.
+# This arm drives the project's server build instead, so the weights stay on the
+# card between jobs -- which is what makes the supervisor's broker worth having:
+# a second job in the same configuration is brokered in 0.0 s rather than
+# re-reading twelve gigabytes.
+lifecycle: resident
+
+resources:
+  gpu: exclusive
+  # Estimate, not a measurement: a Q4_K_M Qwen-Image-Edit is ~12 GiB and the
+  # Qwen2.5-VL encoder another ~8 GiB, but --offload-to-cpu keeps only part of
+  # that resident at a time. Correct this once a run has been measured on the
+  # card; the honest figure is whatever `GET /stats` reports mid-job.
+  vramEstimateMb: 13000
+
+launch:
+  cwd: .
+  # Own interpreter, like every other arm -- though this one has no third-party
+  # dependencies at all. The model runs in a child process written in C++; this
+  # process only translates for it.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen_edit"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--vae"
+    - "{{vae}}"
+    - "--llm"
+    - "{{llm}}"
+    - "--llm-vision"
+    - "{{llmVision}}"
+    # Job requests reach this arm directly rather than through the supervisor's
+    # parameter resolver, so the arm needs roots of its own to confine a job's
+    # paths against. These two are resolved inside storage/ for it.
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--offload-to-cpu"
+    - "{{offloadToCpu}}"
+    - "--flash-attention"
+    - "{{flashAttention}}"
+    - "--threads"
+    - "{{threads}}"
+    - "--model-args"
+    - "{{modelArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+
+health:
+  type: http
+  # The arm binds and answers before the child is started, so this covers
+  # process start only. Reading the weights happens on the first job.
+  path: /healthz
+  timeoutMs: 60000
+
+params: ./params.schema.json

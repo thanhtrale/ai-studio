@@ -7,7 +7,7 @@
  * library's business rather than the browser's.
  */
 
-import type { JobSettings, MediaItem, OutputInfo } from './library';
+import type { ImageJobSettings, MediaItem, OutputInfo, VideoJobSettings } from './library';
 
 export interface GenerateRequest {
   /**
@@ -22,7 +22,7 @@ export interface GenerateRequest {
   negativePrompt?: string;
   /** A media id under the arm input root, for image-to-video. */
   referenceId?: string;
-  settings: JobSettings;
+  settings: VideoJobSettings;
   /** What the console worked out the result will be, after the upsamplers. */
   output: OutputInfo;
   /**
@@ -56,4 +56,56 @@ export interface GenerateResponse {
   /** The library entry that now exists, record and all. */
   media: MediaItem;
   report: ArmGenerationReport;
+}
+
+/**
+ * The image console's request.
+ *
+ * Separate from the video one rather than a modality flag on it, because the
+ * two share almost nothing: no duration, no upsamplers, no enhancer, and a
+ * batch that turns one request into several files. What they do share -- a
+ * browser-chosen job id, a reference by media id, arm start parameters -- is
+ * spelled the same way on purpose.
+ */
+export interface ImageGenerateRequest {
+  jobId: string;
+  prompt: string;
+  negativePrompt?: string;
+  /**
+   * Media ids under the arm input root. Plural because Qwen-Image-Edit takes
+   * several: the references are composed into one scene rather than being
+   * alternatives to choose between.
+   */
+  referenceIds?: string[];
+  settings: ImageJobSettings;
+  output: OutputInfo;
+  armParams?: Record<string, unknown>;
+}
+
+/** One file out of a batch, as the arm reports it. */
+export interface ArmImageOut {
+  out_path: string;
+  out_bytes: number;
+  index: number;
+  seed: number;
+}
+
+/** The image arm's own report, verbatim: its keys are the arm's, not the console's. */
+export interface ArmImageReport {
+  seconds_total: number;
+  steps: number;
+  seed: number;
+  batch: number;
+  width: number;
+  height: number;
+  images: ArmImageOut[];
+  peak_vram_reserved_gib: number;
+  stages: { name: string; seconds: number }[];
+  prompt_used?: string | null;
+}
+
+export interface ImageGenerateResponse {
+  /** One entry per file written, in the order the arm produced them. */
+  media: MediaItem[];
+  report: ArmImageReport;
 }

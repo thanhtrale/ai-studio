@@ -68,8 +68,16 @@ export interface MediaMeta {
   /** What actually reached the model, which differs when the enhancer ran. */
   promptUsed?: string;
   negativePrompt?: string;
-  /** Media id of the conditioning image, when the run was image-to-video. */
+  /** Media id of the conditioning image, when the run had one. */
   referenceId?: string;
+  /**
+   * Every conditioning image, when there was more than one.
+   *
+   * An image edit composes its references rather than choosing between them,
+   * so the set is the input. `referenceId` stays the first of them, so a
+   * reader that only understands one still shows something true.
+   */
+  referenceIds?: string[];
   settings?: JobSettings;
   /** Start parameters the arm was brokered into for this run. */
   armParams?: Record<string, unknown>;
@@ -86,27 +94,62 @@ export interface MediaMeta {
  * what the model was asked for, and the console's inputs are what has to be put
  * back into the form for "use these settings again" to mean anything.
  */
-export interface JobSettings {
+interface CommonSettings {
   aspect?: string;
   megapixels?: number;
-  seconds?: number;
   width: number;
   height: number;
+  seed: number;
+}
+
+export interface VideoJobSettings extends CommonSettings {
+  /**
+   * Absent on every record written before there was a second modality, which
+   * is why video is the one that may omit it rather than the one that declares
+   * it. A reader narrows on `kind === 'image'` and gets video either way.
+   */
+  kind?: 'video';
+  seconds?: number;
   numFrames: number;
   frameRate: number;
-  seed: number;
   enhancePrompt: boolean;
   spatialUpsample: boolean;
   temporalUpsample: boolean;
 }
 
-/** What came out, after the upsamplers changed it. */
+export interface ImageJobSettings extends CommonSettings {
+  kind: 'image';
+  steps: number;
+  cfgScale: number;
+  sampler: string;
+  scheduler: string;
+  flowShift: number;
+  /** How many images the one job asked for. */
+  batch: number;
+  /** Which of them this file is, zero-based. Every image of a batch keeps the whole request. */
+  batchIndex: number;
+}
+
+export type JobSettings = VideoJobSettings | ImageJobSettings;
+
+export function isImageSettings(settings: JobSettings | undefined): settings is ImageJobSettings {
+  return settings?.kind === 'image';
+}
+
+export function isVideoSettings(settings: JobSettings | undefined): settings is VideoJobSettings {
+  return settings !== undefined && settings.kind !== 'image';
+}
+
+/** What came out, after the upsamplers or the batch changed it. */
 export interface OutputInfo {
   width: number;
   height: number;
-  numFrames: number;
-  fps: number;
-  seconds: number;
+  /** Video only. An image has one frame and saying so adds nothing. */
+  numFrames?: number;
+  fps?: number;
+  seconds?: number;
+  /** Images only: how many files the job produced. */
+  count?: number;
 }
 
 export interface ReportSummary {
@@ -277,7 +320,9 @@ export function shortDescription(item: MediaItem): string {
 
   if (output) {
     parts.push(`${output.width}×${output.height}`);
-    if (item.kind === 'video') parts.push(`${output.seconds.toFixed(1)}s`, `${Math.round(output.fps)} fps`);
+    if (item.kind === 'video' && output.seconds !== undefined && output.fps !== undefined) {
+      parts.push(`${output.seconds.toFixed(1)}s`, `${Math.round(output.fps)} fps`);
+    }
   }
 
   parts.push(formatBytes(item.bytes));

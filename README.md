@@ -59,6 +59,7 @@ arms/
   text-llamacpp-cu124/     arm.yaml  params.schema.json  bin/     <- you place binaries here
   image-sdcpp-v03-cu121/   arm.yaml  params.schema.json  bin/
   image-diffusers/         arm.yaml  params.schema.json  .venv/   <- its own interpreter
+  image-qwen-edit-sdcpp/   arm.yaml  params.schema.json  bin/  .venv/
   video-ltx25-diffusers/   arm.yaml  params.schema.json  .venv/
 ```
 
@@ -82,6 +83,7 @@ Every view has a URL and every page is rendered on the server first — there is
 | route | what it is |
 | --- | --- |
 | `/` | what the studio can do, one card per function. A card says *no arm discovered* or *no console yet* rather than pretending |
+| `/generate/image` | the Qwen-Image-Edit console. Same two parameters, and a batch: one request, several files, each filed on its own |
 | `/generate/video` | the LTX-2.5 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
 | `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
 
@@ -89,8 +91,10 @@ Arms are a drawer rather than a route, and it is there for inspection rather tha
 
 The console's right-hand column is what makes a minutes-long run bearable. It carries two things:
 
-- **Two VRAM meters on one axis.** The machine line is `nvidia-smi` for the whole card, sampled once a second by the supervisor whether or not a job is running. The arm line is torch's own reserved figure from inside the arm process. They are different measurements — the first includes the desktop, the browser's compositor, and the driver — so the chart draws both and claims nothing about the gap between them. Measured on one run: 10.00 GiB machine against 9.73 GiB arm.
-- **The job's own timeline**, step by step as it happens: freeing the card, loading the model, the enhancer's rewrite in full, encoding, each denoising step with its time, the upsampling rounds, decode, mux. Almost all of a run is one of load, enhance or denoise, and a spinner cannot tell those apart — nor any of them from a hang.
+- **Two VRAM meters on one axis.** The machine line is `nvidia-smi` for the whole card, sampled once a second by the supervisor whether or not a job is running. The arm line is what the arm itself holds — torch's reserved figure where there is a torch, and `nvidia-smi`'s per-process figure for an arm whose model runs in a child process. They are different measurements — the first includes the desktop, the browser's compositor, and the driver — so the chart draws both and claims nothing about the gap between them. Measured on one run: 10.00 GiB machine against 9.73 GiB arm.
+- **The job's own timeline**, step by step as it happens: freeing the card, loading the model, then whatever that arm's work actually is — the enhancer's rewrite in full, encoding, each denoising step with its time, the upsampling rounds, decode and mux for a clip; encode, sample and decode per image for a batch. Almost all of a run is one of load, enhance or denoise, and a spinner cannot tell those apart — nor any of them from a hang.
+
+  The steps are the arm's to name. The supervisor contributes only the ones it owns, and an arm that is not written in Python at all still reports a timeline: `image-qwen-edit-sdcpp` builds one by reading its child process's log.
 
 Shared UI lives in `apps/web/app/components/ui/` — button, field, input, select, checkbox, card, badge, alert, modal, drawer. Pages compose those rather than restyling controls, which is what keeps one form looking like the next.
 

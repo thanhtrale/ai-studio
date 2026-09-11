@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { frameForRatio, latentTokens, resolveDuration, resolveFrame, resolveOutput } from './frame';
+import {
+  aspectRatio,
+  frameForRatio,
+  IMAGE_MULTIPLE,
+  latentTokens,
+  resolveDuration,
+  resolveFrame,
+  resolveImageFrame,
+  resolveOutput,
+} from './frame';
 
 describe('resolveFrame', () => {
   it('rounds width from the rounded height, not from the raw one', () => {
@@ -27,6 +36,35 @@ describe('resolveFrame', () => {
     const { width, height } = resolveFrame('1:1', 0.001);
     expect(width).toBeGreaterThanOrEqual(256);
     expect(height).toBeGreaterThanOrEqual(256);
+  });
+});
+
+describe('resolveImageFrame', () => {
+  it('keeps every side a multiple of 16, which the video grid would refuse', () => {
+    for (const mp of [0.25, 0.5, 1, 2]) {
+      for (const aspect of ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] as const) {
+        const { width, height } = resolveImageFrame(aspectRatio(aspect), mp);
+        expect(width % IMAGE_MULTIPLE).toBe(0);
+        expect(height % IMAGE_MULTIPLE).toBe(0);
+      }
+    }
+  });
+
+  it('reaches sizes the 32-grid rounds away', () => {
+    // 3:4 at 0.75 MP wants 866x1155. The image grid lands on 752x1008; the
+    // video grid has to give up another block in each direction.
+    expect(resolveImageFrame(3 / 4, 0.75)).toMatchObject({ width: 752, height: 1008 });
+    expect(resolveFrame('3:4', 0.75)).toMatchObject({ width: 736, height: 992 });
+  });
+
+  it('matches a reference image ratio rather than a named aspect', () => {
+    const frame = resolveImageFrame(1200 / 800, 0.5);
+    expect(frame.width / frame.height).toBeCloseTo(1.5, 2);
+  });
+
+  it('never goes below the floor', () => {
+    const { width, height } = resolveImageFrame(1, 0.001);
+    expect(Math.min(width, height)).toBeGreaterThanOrEqual(256);
   });
 });
 

@@ -23,6 +23,7 @@ describe('scaffolded arm packages', () => {
         'text-llamacpp-cu124',
         'image-sdcpp-v03-cu121',
         'image-diffusers',
+        'image-qwen-edit-sdcpp',
         'video-ltx25-diffusers',
       ]),
     );
