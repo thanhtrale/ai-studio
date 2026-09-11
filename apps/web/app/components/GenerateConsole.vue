@@ -1,11 +1,15 @@
 <script setup lang="ts">
 /**
- * The video console: settings on the left, prompt and result in the middle.
+ * The video console: settings, the work, and what the machine is doing with it.
  *
- * The form never sends a size the model would reject. Height is solved from the
- * pixel budget and rounded to 32, width follows from the rounded height, and the
- * frame count snaps to 8n+1 -- so what the panel says underneath each control is
- * what the arm will actually be asked for, not what was typed.
+ * Three columns, because they answer three different questions and only the
+ * middle one is input. The right-hand column is what makes a minutes-long run
+ * bearable: it says which of load, enhance, encode or denoise is happening, and
+ * what the card holds while it happens.
+ *
+ * Nobody starts an arm here. A job names the arm and the configuration it needs
+ * and the supervisor brokers the card into that state -- so the only thing the
+ * Generate button waits for is a prompt.
  */
 import { computed, ref, watch } from 'vue';
 
@@ -24,8 +28,10 @@ import {
   type Duration,
   type Frame,
 } from '../utils/frame';
+import JobTimeline from './JobTimeline.vue';
 import MediaPicker from './MediaPicker.vue';
 import MediaThumb from './MediaThumb.vue';
+import VramChart from './VramChart.vue';
 import UiAlert from './ui/Alert.vue';
 import UiBadge from './ui/Badge.vue';
 import UiButton from './ui/Button.vue';
@@ -58,7 +64,46 @@ watch(
 
 const armOptions = computed(() => videoArms.value.map((arm) => ({ value: arm.id, label: arm.name })));
 const arm = computed(() => videoArms.value.find((candidate) => candidate.id === armId.value) ?? null);
-const running = computed(() => arm.value?.state === 'running');
+
+/**
+ * What each offload setting actually does, in the words of the measurements.
+ *
+ * The values come from the arm's own parameter schema rather than a list here,
+ * so an arm offering different ones is not misrepresented; only the wording is
+ * ours, and a value with no wording keeps its raw name.
+ */
+const OFFLOAD_LABELS: Record<string, string> = {
+  'group-stream': 'stream — overlapped, from host RAM',
+  group: 'group — host RAM, no overlap',
+  'group-disk': 'disk — weights on NVMe',
+  model: 'model — whole components at a time',
+  sequential: 'sequential — one submodule at a time',
+  none: 'none — everything resident',
+};
+
+interface SchemaEnum {
+  enum?: string[];
+  default?: string;
+}
+
+const offloadSchema = computed<SchemaEnum | null>(() => {
+  const properties = (arm.value?.paramsSchema as { properties?: Record<string, SchemaEnum> } | null)
+    ?.properties;
+  return properties?.['offload'] ?? null;
+});
+
+const offloadOptions = computed(() =>
+  (offloadSchema.value?.enum ?? []).map((value) => ({ value, label: OFFLOAD_LABELS[value] ?? value })),
+);
+
+const offload = ref<string>('');
+watch(
+  offloadSchema,
+  (schema) => {
+    if (!offload.value && schema?.default) offload.value = schema.default;
+  },
+  { immediate: true },
+);
 
 const prompt = ref('');
 const referenceId = ref<string | null>(null);
@@ -74,7 +119,7 @@ const spatialUpsample = ref(false);
 const temporalUpsample = ref(false);
 
 const picking = ref(false);
-const { byId } = useMedia();
+const { byId, refresh: refreshMedia } = useMedia();
 const reference = computed(() => (referenceId.value ? (byId.value.get(referenceId.value) ?? null) : null));
 
 /**
@@ -105,6 +150,7 @@ const duration = computed<Duration>(() => {
   if (!fixed) return resolveDuration(seconds.value, fps.value);
   return { numFrames: fixed.numFrames, seconds: fixed.numFrames / Math.max(1, fps.value) };
 });
+
 const output = computed(() =>
   resolveOutput(frame.value, duration.value, fps.value, spatialUpsample.value, temporalUpsample.value),
 );
@@ -117,6 +163,8 @@ function restoreFrom(meta: MediaMeta): void {
   const settings = meta.settings;
   prompt.value = meta.prompt ?? '';
   referenceId.value = meta.referenceId ?? null;
+  const previousOffload = meta.armParams?.['offload'];
+  if (typeof previousOffload === 'string') offload.value = previousOffload;
   if (!settings) return;
 
   if (settings.aspect && (ASPECTS as readonly string[]).includes(settings.aspect)) {
@@ -130,11 +178,7 @@ function restoreFrom(meta: MediaMeta): void {
   spatialUpsample.value = settings.spatialUpsample;
   temporalUpsample.value = settings.temporalUpsample;
   // Last, because the assignments above each clear it.
-  exact.value = {
-    width: settings.width,
-    height: settings.height,
-    numFrames: settings.numFrames,
-  };
+  exact.value = { width: settings.width, height: settings.height, numFrames: settings.numFrames };
 }
 
 watch(
@@ -157,7 +201,10 @@ const status = ref<'idle' | 'generating'>('idle');
 const failure = ref<string | null>(null);
 const result = ref<{ media: MediaItem; report: ArmGenerationReport } | null>(null);
 
-const canGenerate = computed(() => running.value && prompt.value.trim().length > 0 && status.value === 'idle');
+const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: follow, stopWatching } =
+  useJobTelemetry();
+
+const canGenerate = computed(() => prompt.value.trim().length > 0 && status.value === 'idle');
 
 async function generate(): Promise<void> {
   if (!canGenerate.value || !arm.value) return;
@@ -183,18 +230,26 @@ async function generate(): Promise<void> {
     temporalUpsample: temporalUpsample.value,
   };
 
+  // Chosen here rather than returned by the server: the run takes minutes, and
+  // the console has to be able to ask about it while the request is still open.
+  const jobId = crypto.randomUUID();
   const body: GenerateRequest = {
+    jobId,
     prompt: prompt.value.trim(),
     settings,
     output: output.value,
     ...(referenceId.value ? { referenceId: referenceId.value } : {}),
+    ...(offload.value ? { armParams: { offload: offload.value } } : {}),
   };
+
+  follow(jobId);
 
   try {
     result.value = await $fetch<GenerateResponse>(
       `/api/arms/${encodeURIComponent(arm.value.id)}/generate`,
       { method: 'POST', body },
     );
+    await refreshMedia();
   } catch (error) {
     failure.value = describeFetchError(error);
   } finally {
@@ -207,14 +262,7 @@ const number = (value: number): string => value.toLocaleString('en-US');
 
 <template>
   <div class="flex h-full">
-    <aside class="w-96 shrink-0 space-y-5 overflow-y-auto border-r border-white/10 p-6">
-      <div
-        class="rounded bg-surface-raised py-2 text-center text-xs"
-        :class="status === 'generating' ? 'text-amber-300' : 'text-slate-400'"
-      >
-        {{ status === 'generating' ? 'generating' : running ? 'idle' : 'arm not running' }}
-      </div>
-
+    <aside class="w-80 shrink-0 space-y-5 overflow-y-auto border-r border-white/10 p-5">
       <UiField
         label="Arm"
         for="arm"
@@ -269,13 +317,21 @@ const number = (value: number): string => value.toLocaleString('en-US');
         <UiInput id="seed" v-model="seed" placeholder="empty = random" />
       </UiField>
 
+      <UiField v-if="offloadOptions.length > 0" label="Offload" for="offload">
+        <UiSelect id="offload" v-model="offload" :options="offloadOptions" />
+        <template #hint>
+          How weights reach the card. Changing it reloads the arm, because placement is decided when the
+          weights are read.
+        </template>
+      </UiField>
+
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium text-slate-200">Upsamplers</legend>
         <UiCheckbox v-model="spatialUpsample" label="Spatial (&#215;2 edge)" />
         <UiCheckbox v-model="temporalUpsample" label="Temporal (&#215;2 frames, same duration)" />
         <p class="text-xs text-slate-500">
-          Lightricks' own latent upsamplers. Each runs a further denoising round on what it upsampled, so the
-          model redraws detail rather than interpolating it.
+          Lightricks' own latent upsamplers. Each runs a further denoising round on what it upsampled, so
+          the model redraws detail rather than interpolating it.
         </p>
       </fieldset>
 
@@ -289,8 +345,8 @@ const number = (value: number): string => value.toLocaleString('en-US');
       </div>
     </aside>
 
-    <main class="min-w-0 flex-1 overflow-y-auto p-8">
-      <div class="max-w-3xl space-y-6">
+    <div class="grid min-w-0 flex-1 grid-cols-1 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_30rem]">
+      <main class="min-w-0 space-y-6 p-6">
         <UiField label="Prompt" for="prompt" required>
           <UiTextarea
             id="prompt"
@@ -335,12 +391,20 @@ const number = (value: number): string => value.toLocaleString('en-US');
           </template>
         </UiField>
 
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
           <UiButton variant="primary" :disabled="!canGenerate" data-testid="generate" @click="generate">
-            {{ status === 'generating' ? 'Generating…' : 'Generate' }}
+            {{ status === 'generating' ? 'Running…' : 'Generate' }}
           </UiButton>
-          <p v-if="!running" class="text-xs text-slate-500">Start the arm from the Arms pane first.</p>
+          <UiButton v-if="job && status === 'generating'" @click="stopWatching()">Stop watching</UiButton>
+          <NuxtLink to="/library" class="ml-auto">
+            <UiButton>Library →</UiButton>
+          </NuxtLink>
         </div>
+
+        <p class="text-xs text-slate-500">
+          No arm has to be started first. The supervisor stops whatever holds the card and loads what this
+          job needs.
+        </p>
 
         <UiAlert v-if="failure" tone="error">{{ failure }}</UiAlert>
 
@@ -359,9 +423,6 @@ const number = (value: number): string => value.toLocaleString('en-US');
             <span>{{ formatBytes(result.media.bytes) }}</span>
             <span>seed {{ result.report.seed }}</span>
             <span>peak {{ result.report.peak_vram_reserved_gib.toFixed(2) }} GiB</span>
-            <span v-for="stage in result.report.stages" :key="stage.name">
-              {{ stage.name }} {{ stage.seconds.toFixed(1) }}s
-            </span>
             <NuxtLink
               :to="{ path: '/library', query: { folder: result.media.group, item: result.media.id } }"
               class="text-indigo-300 hover:text-indigo-200"
@@ -369,13 +430,25 @@ const number = (value: number): string => value.toLocaleString('en-US');
               Open in library →
             </NuxtLink>
           </div>
-          <p v-if="result.report.prompt_used && result.report.prompt_used !== prompt.trim()" class="text-xs">
-            <span class="text-slate-500">Enhanced to:</span>
-            <span class="text-slate-400"> {{ result.report.prompt_used }}</span>
-          </p>
         </section>
-      </div>
-    </main>
+      </main>
+
+      <aside class="min-w-0 space-y-5 border-white/10 p-6 xl:border-l">
+        <VramChart
+          :machine="machine"
+          :arm="armVram"
+          :capacity-gib="capacityGib"
+          :available="available"
+        />
+
+        <JobTimeline :job="job" :elapsed-seconds="elapsedSeconds" />
+
+        <p v-if="!job" class="text-sm text-slate-500">
+          The chart runs whether or not this studio does — what the card already holds is most of the gap
+          between the two meters. A job's own steps appear here once one is submitted.
+        </p>
+      </aside>
+    </div>
 
     <MediaPicker
       :open="picking"

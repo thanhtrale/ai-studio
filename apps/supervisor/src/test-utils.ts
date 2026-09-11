@@ -1,3 +1,4 @@
+import { createServer, type Server } from 'node:http';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -102,6 +103,8 @@ class FakeProcess {
   alive = true;
   output = '';
   readonly exited: Promise<ExitInfo>;
+  /** Set when the harness is serving: a real listener on the allocated port. */
+  server: Server | null = null;
   #settle!: (info: ExitInfo) => void;
 
   constructor(pid: number) {
@@ -114,6 +117,8 @@ class FakeProcess {
   exit(code: number | null = 0): void {
     if (!this.alive) return;
     this.alive = false;
+    this.server?.close();
+    this.server = null;
     this.#settle({ code, signal: null });
   }
 
@@ -131,6 +136,14 @@ export interface Harness {
   /** When false, even a forced termination leaves the process alive. */
   forceWorks: boolean;
   healthy: boolean;
+  /**
+   * Bind a real loopback listener on the port the manager allocated.
+   *
+   * The control server relays job requests with the global fetch rather than an
+   * injected one -- it is talking to a separate process, not to a dependency --
+   * so anything exercising that path needs an arm that genuinely answers.
+   */
+  serve: FakeArmRoutes | null;
   launch: (spec: LaunchSpec) => LaunchedProcess;
   terminateTree: (pid: number, mode: TerminationMode) => Promise<void>;
   processExists: (pid: number) => boolean;
@@ -139,6 +152,49 @@ export interface Harness {
   last(): FakeProcess;
   /** Resolves once `count` processes have been launched. */
   waitForProcess(count?: number): Promise<FakeProcess>;
+}
+
+export interface FakeArmRoutes {
+  generate?: (body: Record<string, unknown>) => { status: number; body: unknown };
+  progress?: (jobId: string) => unknown;
+}
+
+function portFrom(args: readonly string[]): number | null {
+  const index = args.indexOf('--port');
+  const value = Number(args[index + 1]);
+  return index >= 0 && Number.isInteger(value) ? value : null;
+}
+
+function serveFakeArm(routes: FakeArmRoutes, port: number): Server {
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+
+    const reply = (status: number, body: unknown): void => {
+      const payload = JSON.stringify(body);
+      response.writeHead(status, { 'Content-Type': 'application/json' });
+      response.end(payload);
+    };
+
+    if (url.pathname === '/progress') {
+      reply(200, routes.progress?.(url.searchParams.get('jobId') ?? '') ?? {});
+      return;
+    }
+
+    if (url.pathname === '/generate') {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<string, unknown>;
+        const answer = routes.generate?.(body) ?? { status: 200, body: { ok: true } };
+        reply(answer.status, answer.body);
+      });
+      return;
+    }
+
+    reply(200, { status: 'ok' });
+  });
+  server.listen(port, '127.0.0.1');
+  return server;
 }
 
 export function createHarness(): Harness {
@@ -154,12 +210,17 @@ export function createHarness(): Harness {
     gracefulWorks: true,
     forceWorks: true,
     healthy: true,
+    serve: null,
 
     launch(spec: LaunchSpec): LaunchedProcess {
       specs.push(spec);
       const created = new FakeProcess(nextPid);
       nextPid += 1;
       processes.push(created);
+
+      const port = harness.serve ? portFrom(spec.args) : null;
+      if (harness.serve && port !== null) created.server = serveFakeArm(harness.serve, port);
+
       return created as unknown as LaunchedProcess;
     },
 

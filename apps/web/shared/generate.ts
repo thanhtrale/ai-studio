@@ -10,6 +10,14 @@
 import type { JobSettings, MediaItem, OutputInfo } from './library';
 
 export interface GenerateRequest {
+  /**
+   * Chosen by the browser, not returned to it.
+   *
+   * The console has to be able to ask about a job while the request that
+   * submitted it is still open -- a clip is minutes long -- so the id cannot
+   * arrive with the response.
+   */
+  jobId: string;
   prompt: string;
   negativePrompt?: string;
   /** A media id under the arm input root, for image-to-video. */
@@ -17,6 +25,14 @@ export interface GenerateRequest {
   settings: JobSettings;
   /** What the console worked out the result will be, after the upsamplers. */
   output: OutputInfo;
+  /**
+   * How the arm must be configured to run this.
+   *
+   * Start parameters decide how weights are placed and cannot change without
+   * reloading them, so they belong to the job rather than to a separate act of
+   * starting an arm -- which the user never performs.
+   */
+  armParams?: Record<string, unknown>;
 }
 
 /** The arm's own report, verbatim: its keys are the arm's, not the console's. */

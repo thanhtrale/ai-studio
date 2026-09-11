@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ArmManager } from './arm-manager.js';
+import { GpuSampler } from './gpu.js';
+import { JobStore } from './jobs.js';
 import { createControlServer } from './server.js';
 import {
   EMPTY_PARAMS_SCHEMA,
@@ -43,7 +45,7 @@ async function startServer(): Promise<Fixture> {
   });
   await manager.init();
 
-  const server = createControlServer(config, manager);
+  const server = createControlServer(config, { manager, jobs: new JobStore(), gpu: new GpuSampler() });
   await new Promise<void>((resolve) => server.listen(0, config.host, resolve));
   const address = server.address() as AddressInfo;
 
@@ -70,7 +72,7 @@ describe('control server', () => {
     const manager = new ArmManager(config, { ...createHarness() });
     await manager.init();
 
-    const server = createControlServer(config, manager);
+    const server = createControlServer(config, { manager, jobs: new JobStore(), gpu: new GpuSampler() });
     await new Promise<void>((resolve) => server.listen(0, config.host, resolve));
     const address = server.address() as AddressInfo;
 
@@ -170,7 +172,7 @@ describe('control server', () => {
     const manager = new ArmManager(config, { ...createHarness() });
     await manager.init();
 
-    const server = createControlServer(config, manager);
+    const server = createControlServer(config, { manager, jobs: new JobStore(), gpu: new GpuSampler() });
     await new Promise<void>((resolve) => server.listen(0, config.host, resolve));
     const address = server.address() as AddressInfo;
 

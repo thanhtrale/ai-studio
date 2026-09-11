@@ -85,7 +85,12 @@ Every view has a URL and every page is rendered on the server first — there is
 | `/generate/video` | the LTX-2.5 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
 | `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
 
-Arms are a drawer rather than a route: starting one evicts whichever arm holds the GPU, so it is something you do to the machine from wherever you are.
+Arms are a drawer rather than a route, and it is there for inspection rather than operation: **nobody starts an arm by hand**. See the broker below.
+
+The console's right-hand column is what makes a minutes-long run bearable. It carries two things:
+
+- **Two VRAM meters on one axis.** The machine line is `nvidia-smi` for the whole card, sampled once a second by the supervisor whether or not a job is running. The arm line is torch's own reserved figure from inside the arm process. They are different measurements — the first includes the desktop, the browser's compositor, and the driver — so the chart draws both and claims nothing about the gap between them. Measured on one run: 10.00 GiB machine against 9.73 GiB arm.
+- **The job's own timeline**, step by step as it happens: freeing the card, loading the model, the enhancer's rewrite in full, encoding, each denoising step with its time, the upsampling rounds, decode, mux. Almost all of a run is one of load, enhance or denoise, and a spinner cannot tell those apart — nor any of them from a hang.
 
 Shared UI lives in `apps/web/app/components/ui/` — button, field, input, select, checkbox, card, badge, alert, modal, drawer. Pages compose those rather than restyling controls, which is what keeps one form looking like the next.
 
@@ -107,11 +112,24 @@ Sidebar folders are directories, not a separate concept: date folders for genera
 
 Video thumbnails are the `<video>` element with a `#t=` fragment, so the browser decodes the frame and the studio needs no ffmpeg and no second copy on disk. The media route answers range requests, which is what makes that work — and what lets a clip be scrubbed.
 
-## GPU arbitration
+## GPU arbitration and the broker
 
 One arm holds the GPU at a time. Starting a second exclusive arm stops the first and waits for it to actually exit before launching. Stopping kills the whole process tree — a Python arm's workers would otherwise keep the allocation alive.
 
 The policy is one function (`plan()` in the supervisor). A VRAM-budget policy that lets several small arms coexist replaces it without touching any caller.
+
+**The user never starts an arm.** A job says which arm it needs and in which configuration, and the supervisor gets the card into that state before relaying it (`acquire()` in `arm-manager.ts`, planned by `brokerPlan()`):
+
+| what is on the card | what happens |
+| --- | --- |
+| the arm the job needs, same start parameters | reused — reloading 36 GiB of weights to run a second clip would be absurd |
+| the arm the job needs, *different* start parameters | unloaded and reloaded: placement is decided when the weights are read, so it cannot be changed in place |
+| a different exclusive arm | stopped first, and the memory has to actually come back before the replacement claims it |
+| an arm adopted after a supervisor restart | reloaded, because nothing recorded how it was started and the broker will not assume |
+
+Every step it takes is reported into the job's timeline as it takes it, so "Queued for the card" is a row with a reason and children, not a spinner. Measured end to end: a cold start added 3.6 s before the model load; a second job with the same parameters was reused at 0.0 s; changing `offload` unloaded in 10.5 s and restarted in 3.5 s.
+
+Brokering runs on the same queue as start and stop, so a second job arriving mid-eviction waits rather than racing onto the card.
 
 ## Security
 

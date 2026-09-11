@@ -16,6 +16,7 @@ from typing import Any
 from . import __version__
 from .generation import JobError, generate, parse_job
 from .loading import LoadConfig, host_rss_gib, load_pipeline, vram_snapshot
+from .progress import JobProgress
 
 ARM_ID = "video-ltx25-diffusers"
 MAX_BODY_BYTES = 64 * 1024
@@ -30,6 +31,9 @@ class ArmState:
         self.in_dir = in_dir
         self._pipe: Any | None = None
         self._load_report: Any | None = None
+        # One job at a time on the card, so one timeline is enough. A caller
+        # polls it by job id and is told nothing if the arm has moved on.
+        self.progress = JobProgress()
         # One generation at a time. A second concurrent run would double peak
         # VRAM on a card that is already oversubscribed.
         self._gpu = threading.Lock()
@@ -44,16 +48,34 @@ class ArmState:
 
     def run(self, body: dict[str, Any]) -> dict[str, Any]:
         job = parse_job(body, self.out_dir, self.in_dir)
+        raw_id = body.get("jobId")
+        job_id = raw_id if isinstance(raw_id, str) and raw_id else None
 
         if not self._gpu.acquire(blocking=False):
+            # Deliberately before `begin`: a rejected job must not wipe the
+            # timeline of the one that is actually running.
             raise Busy("a generation is already running")
         try:
+            self.progress.begin(job_id)
             if self._pipe is None:
                 print(f"[{ARM_ID}] loading {self.config.model_dir} ({self.config.precision})", flush=True)
-                self._pipe, self._load_report = load_pipeline(self.config)
+                # 66 GiB across PCIe, and the single longest step of a first job.
+                # Reported as its own step so it is never mistaken for a hang.
+                with self.progress.step(
+                    "load", "Load model", f"{self.config.precision} · offload {self.config.offload}"
+                ) as reported:
+                    self._pipe, self._load_report = load_pipeline(self.config)
+                    reported.detail(
+                        f"{type(self._pipe).__name__} · {self.config.precision}"
+                        f" · offload {self.config.offload}"
+                    )
                 print(f"[{ARM_ID}] loaded in {self._load_report.seconds:.1f}s", flush=True)
 
-            report = generate(self._pipe, job, self.config.model_dir)
+            report = generate(self._pipe, job, self.config.model_dir, self.progress)
+            self.progress.finish()
+        except Exception as error:
+            self.progress.fail(f"{type(error).__name__}: {error}")
+            raise
         finally:
             self._gpu.release()
 
@@ -86,6 +108,10 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                         "offload": state.config.offload,
                     },
                 )
+                return
+
+            if self.path.split("?")[0] == "/progress":
+                self._respond(200, state.progress.snapshot())
                 return
 
             if self.path == "/stats":

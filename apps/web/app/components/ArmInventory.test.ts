@@ -16,6 +16,7 @@ function arm(overrides: Partial<ArmSummary> = {}): ArmSummary {
     vramEstimateMb: 8000,
     state: 'stopped',
     detail: null,
+    startedWith: null,
     paramsSchema: { type: 'object' },
     updatedAt: '2026-09-09T00:00:00.000Z',
     ...overrides,

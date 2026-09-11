@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { ArmGpuMode, ArmLifecycle, ArmModality, ArmProtocol } from './manifest.js';
 import type { ParamsSchema } from './params.js';
+import type { LaunchValue } from './substitute.js';
 
 export const ARM_STATES = ['stopped', 'starting', 'running', 'stopping', 'failed', 'invalid'] as const;
 export type ArmState = (typeof ARM_STATES)[number];
@@ -21,6 +22,12 @@ export interface ArmSummary {
   state: ArmState;
   /** Failure reason, or the manifest validation error when state is `invalid`. */
   detail: string | null;
+  /**
+   * The resolved parameters a running arm was launched with, or null when it is
+   * not running -- or was adopted after a supervisor restart, which is why the
+   * broker reloads such an arm rather than assume it matches.
+   */
+  startedWith: Record<string, LaunchValue> | null;
   paramsSchema: ParamsSchema | null;
   updatedAt: string;
 }
@@ -40,6 +47,22 @@ export const startArmRequestSchema = z.strictObject({
 });
 
 export type StartArmRequest = z.infer<typeof startArmRequestSchema>;
+
+/**
+ * A job, plus the configuration the arm has to be in to run it.
+ *
+ * The two travel together because the caller never starts an arm: it says what
+ * it needs and the supervisor brokers the card into that state. `job` is opaque
+ * here on purpose -- its schema belongs to the arm, and the supervisor
+ * deliberately knows nothing about modality-specific payloads.
+ */
+export const jobRequestSchema = z.strictObject({
+  jobId: z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a plain identifier'),
+  params: z.record(z.string(), z.unknown()).default({}),
+  job: z.record(z.string(), z.unknown()),
+});
+
+export type JobRequest = z.infer<typeof jobRequestSchema>;
 
 export interface StartArmResponse {
   arm: ArmSummary;

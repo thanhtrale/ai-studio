@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import { ArmManager } from './arm-manager.js';
 import { ConfigError, loadConfig } from './config.js';
+import { GpuSampler } from './gpu.js';
+import { JobStore } from './jobs.js';
 import { createControlServer } from './server.js';
 
 const ROOT_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..', '..');
@@ -18,13 +20,18 @@ async function main(): Promise<void> {
 
   const config = loadConfig(process.env, ROOT_DIR);
   const manager = new ArmManager(config);
+  const jobs = new JobStore();
+  // Started before any arm, so the console can show what the card held before
+  // this studio touched it -- which is most of the gap between the two meters.
+  const gpu = new GpuSampler();
+  gpu.start();
 
   console.log(`[supervisor] arms:    ${config.armsDir}`);
   console.log(`[supervisor] storage: ${config.storageDir}`);
   console.log('[supervisor] reconciling previously launched processes...');
   await manager.init();
 
-  const server = createControlServer(config, manager);
+  const server = createControlServer(config, { manager, jobs, gpu });
   server.listen(config.port, config.host, () => {
     console.log(`[supervisor] listening on http://${config.host}:${config.port}`);
   });
@@ -35,6 +42,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[supervisor] ${signal} received, stopping arms`);
     server.close();
+    gpu.stop();
     await manager.shutdown();
     process.exit(0);
   };

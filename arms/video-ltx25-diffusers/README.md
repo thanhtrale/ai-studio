@@ -243,6 +243,17 @@ pressure, and roughly doubles when it is.
 `GET /healthz` answers as soon as the process is up. `GET /stats` reports the load
 report, a VRAM snapshot and host RSS.
 
+`GET /progress` reports what the *current* job is doing, in the studio's own
+`JobProgress` shape: each step with its state and elapsed time, the denoising
+steps as children under a counter, the enhancer's rewrite in full, and a reading
+of `torch.cuda.memory_reserved()` once a second. A job carries a `jobId`, and the
+snapshot is tagged with it — a poll that names a job the arm has moved on from is
+answered with the current job's id and can be discarded rather than misread as
+the one that was asked about.
+
+It is served on a separate thread from the generation, which is the point: the
+run holds the GPU lock for minutes and the reader is a different request.
+
 Weights load on the **first job**, not at startup: reading 66 GiB and pinning it
 would outlast any sane health-check timeout, and the supervisor's contract is that
 a started arm is reachable, not that it is warm.

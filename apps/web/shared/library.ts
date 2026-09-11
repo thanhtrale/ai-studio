@@ -61,6 +61,8 @@ export interface MediaMeta {
   /** Media id of the conditioning image, when the run was image-to-video. */
   referenceId?: string;
   settings?: JobSettings;
+  /** Start parameters the arm was brokered into for this run. */
+  armParams?: Record<string, unknown>;
   output?: OutputInfo;
   report?: ReportSummary;
   /** Uploads keep the name they arrived with; the stored name is sanitised. */

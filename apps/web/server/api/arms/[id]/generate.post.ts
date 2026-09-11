@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { GenerateRequest, GenerateResponse } from '#shared/generate';
 import { generatedMediaId } from '#shared/library';
 
@@ -24,7 +22,17 @@ export default defineEventHandler(async (event): Promise<GenerateResponse> => {
     });
   }
 
-  const jobId = randomUUID();
+  // The browser supplies the id rather than receiving one, because it has to
+  // be able to poll the job's progress while this request is still open.
+  const jobId = body.jobId;
+  if (typeof jobId !== 'string' || !/^[A-Za-z0-9._-]{8,64}$/.test(jobId)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'invalid_request',
+      data: { message: 'jobId is required and must be a plain identifier' },
+    });
+  }
+
   const startedAt = new Date();
   // The date directory is decided here rather than by the arm, so that where a
   // generation is filed is one rule in one place -- and the same rule whether
@@ -37,18 +45,24 @@ export default defineEventHandler(async (event): Promise<GenerateResponse> => {
     const client = supervisorClient(event);
 
     const report = await client.job<GenerateResponse['report']>(armId, {
-      prompt,
-      outPath: plannedId.slice('outputs/'.length),
-      width: settings.width,
-      height: settings.height,
-      numFrames: settings.numFrames,
-      frameRate: settings.frameRate,
-      seed: settings.seed,
-      enhancePrompt: settings.enhancePrompt,
-      spatialUpsample: settings.spatialUpsample,
-      temporalUpsample: settings.temporalUpsample,
-      ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
-      ...(image ? { image } : {}),
+      jobId,
+      // How the arm has to be configured. The supervisor reloads it if what is
+      // on the card does not match, which is why this travels with the job.
+      params: body.armParams ?? {},
+      job: {
+        prompt,
+        outPath: plannedId.slice('outputs/'.length),
+        width: settings.width,
+        height: settings.height,
+        numFrames: settings.numFrames,
+        frameRate: settings.frameRate,
+        seed: settings.seed,
+        enhancePrompt: settings.enhancePrompt,
+        spatialUpsample: settings.spatialUpsample,
+        temporalUpsample: settings.temporalUpsample,
+        ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
+        ...(image ? { image } : {}),
+      },
     });
 
     // Trust what the arm says it wrote over what we asked it to write. They
@@ -61,6 +75,9 @@ export default defineEventHandler(async (event): Promise<GenerateResponse> => {
       jobId,
       armId,
       prompt,
+      ...(body.armParams && Object.keys(body.armParams).length > 0
+        ? { armParams: body.armParams }
+        : {}),
       ...(report.prompt_used && report.prompt_used !== prompt ? { promptUsed: report.prompt_used } : {}),
       ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
       ...(body.referenceId ? { referenceId: body.referenceId } : {}),

@@ -10,6 +10,7 @@ import {
   type LaunchValue,
 } from '@ai-studio/arm-contract';
 
+import { brokerPlan, type BrokerAction, type RunningArm } from './broker.js';
 import type { SupervisorConfig } from './config.js';
 import { discoverArms, type DiscoveredArm, type InvalidArm } from './discovery.js';
 import { launch as defaultLaunch, type ExitInfo, type LaunchedProcess } from './launcher.js';
@@ -32,6 +33,18 @@ export class ArmControlError extends Error {
 
 type RuntimeState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 
+/** Reported as the broker acts, so a caller can show it happening rather than after. */
+export interface AcquireHooks {
+  onPlan?: (reason: string) => void;
+  onStep?: (key: string, label: string, seconds: number) => void;
+}
+
+export interface AcquireResult {
+  action: BrokerAction;
+  evicted: string[];
+  arm: ArmSummary;
+}
+
 interface ArmRuntime {
   arm: DiscoveredArm;
   state: RuntimeState;
@@ -40,6 +53,12 @@ interface ArmRuntime {
   pid: number | null;
   process: LaunchedProcess | null;
   updatedAt: number;
+  /**
+   * The resolved parameters this arm was launched with, or null when that is
+   * not known -- a process adopted after a supervisor restart. The broker
+   * reloads an arm whose configuration it cannot vouch for rather than assume.
+   */
+  startedWith: Record<string, LaunchValue> | null;
 }
 
 export interface ArmManagerDeps {
@@ -115,6 +134,7 @@ export class ArmManager {
       pid: null,
       process: null,
       updatedAt: this.#deps.now(),
+      startedWith: null,
     };
   }
 
@@ -184,6 +204,7 @@ export class ArmManager {
         vramEstimateMb: runtime.arm.manifest.resources.vramEstimateMb ?? null,
         state: runtime.state,
         detail: runtime.detail,
+        startedWith: runtime.startedWith,
         paramsSchema: runtime.arm.paramsSchema,
         updatedAt: new Date(runtime.updatedAt).toISOString(),
       });
@@ -200,6 +221,7 @@ export class ArmManager {
         vramEstimateMb: null,
         state: 'invalid',
         detail: entry.error,
+        startedWith: null,
         paramsSchema: null,
         updatedAt: new Date(this.#deps.now()).toISOString(),
       });
@@ -243,9 +265,88 @@ export class ArmManager {
   }
 
   #runningArms(): SchedulableArm[] {
+    return this.#runningWithParams();
+  }
+
+  #runningWithParams(): RunningArm[] {
     return [...this.#runtimes.values()]
       .filter((runtime) => runtime.state === 'running' || runtime.state === 'starting')
-      .map((runtime) => this.#schedulable(runtime));
+      .map((runtime) => ({ ...this.#schedulable(runtime), startedWith: runtime.startedWith }));
+  }
+
+  /**
+   * Puts the card into the state a job needs, and says what that took.
+   *
+   * This is the whole of "the user never starts an arm". A job names the arm it
+   * wants and the configuration it wants it in; whatever is on the card now is
+   * the broker's problem. An arm already up in that configuration is reused --
+   * reloading 36 GiB of weights to run a second clip would be absurd -- and
+   * anything else is stopped first, because the memory has to actually come back
+   * before the replacement can claim it.
+   *
+   * It runs on the same queue as start and stop, so a second job arriving mid
+   * eviction waits rather than racing it onto the card.
+   */
+  async acquire(
+    id: string,
+    params: Readonly<Record<string, unknown>> = {},
+    hooks: AcquireHooks = {},
+  ): Promise<AcquireResult> {
+    if (!this.#ready) {
+      throw new ArmControlError('reconciling', 'supervisor is still reconciling previously launched processes');
+    }
+    return this.#enqueue(() => this.#acquireNow(id, params, hooks));
+  }
+
+  async #acquireNow(
+    id: string,
+    params: Readonly<Record<string, unknown>>,
+    hooks: AcquireHooks,
+  ): Promise<AcquireResult> {
+    const runtime = this.#require(id);
+
+    if (runtime.arm.manifest.lifecycle !== 'resident') {
+      throw new ArmControlError(
+        'invalid_request',
+        `arm "${id}" is one-shot: it runs per job and has no process to broker`,
+      );
+    }
+
+    // Resolved before planning, not after: the comparison has to be against the
+    // values the arm would actually be launched with, defaults included.
+    const resolved = this.#resolveLaunch(runtime, params);
+    const decision = brokerPlan(this.#schedulable(runtime), resolved, this.#runningWithParams(), this.#deps.policy);
+    hooks.onPlan?.(decision.reason);
+
+    if (decision.action === 'reuse') {
+      hooks.onStep?.('reuse', `${id} is already loaded`, 0);
+      return { action: 'reuse', evicted: [], arm: this.summary(id) };
+    }
+
+    const evicted: string[] = [];
+    for (const victimId of decision.evict) {
+      const at = this.#deps.now();
+      try {
+        await this.#stopNow(victimId);
+      } catch (error) {
+        throw new ArmControlError(
+          'eviction_failed',
+          `cannot free the GPU: arm "${victimId}" could not be stopped (${(error as Error).message})`,
+        );
+      }
+      evicted.push(victimId);
+      hooks.onStep?.(
+        `stop-${victimId}`,
+        victimId === id ? `Unloaded ${victimId}` : `Stopped ${victimId} to free the card`,
+        (this.#deps.now() - at) / 1000,
+      );
+    }
+
+    const at = this.#deps.now();
+    await this.#startNow(id, params);
+    hooks.onStep?.(`start-${id}`, `Started ${id}`, (this.#deps.now() - at) / 1000);
+
+    return { action: decision.action, evicted, arm: this.summary(id) };
   }
 
   async start(id: string, params: Readonly<Record<string, unknown>> = {}): Promise<{ arm: ArmSummary; evicted: string[] }> {
@@ -338,6 +439,7 @@ export class ArmManager {
 
     runtime.state = 'running';
     runtime.detail = null;
+    runtime.startedWith = resolved;
     runtime.updatedAt = this.#deps.now();
 
     void launched.exited.then(() => {
@@ -359,6 +461,7 @@ export class ArmManager {
     runtime.port = null;
     runtime.pid = null;
     runtime.process = null;
+    runtime.startedWith = null;
     runtime.updatedAt = this.#deps.now();
     throw new ArmControlError(code, message);
   }
@@ -466,6 +569,7 @@ export class ArmManager {
     runtime.port = null;
     runtime.pid = null;
     runtime.process = null;
+    runtime.startedWith = null;
     runtime.updatedAt = this.#deps.now();
   }
 

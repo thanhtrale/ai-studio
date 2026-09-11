@@ -1,4 +1,11 @@
-import type { ArmSummary, ControlErrorBody, ControlErrorCode, InventoryResponse } from '@ai-studio/arm-contract';
+import type {
+  ArmSummary,
+  ControlErrorBody,
+  ControlErrorCode,
+  GpuTelemetry,
+  InventoryResponse,
+  JobProgressResponse,
+} from '@ai-studio/arm-contract';
 
 /**
  * Failure categories the browser is allowed to distinguish. The point of the
@@ -118,12 +125,28 @@ export class SupervisorClient {
     });
   }
 
-  /** Relays a generation request to the arm itself; the job schema is the arm's. */
-  job<T>(armId: string, body: unknown): Promise<T> {
+  /**
+   * Submits a job, and with it the configuration the arm has to be in to run it.
+   *
+   * No start call precedes this. The supervisor brokers the card -- stopping
+   * whatever holds it, loading what the job needs -- and the job schema inside
+   * `job` stays the arm's own, which is why it is opaque here.
+   */
+  job<T>(armId: string, request: { jobId: string; params?: Record<string, unknown>; job: unknown }): Promise<T> {
     return this.#call<T>(`/v1/arms/${encodeURIComponent(armId)}/jobs`, {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ jobId: request.jobId, params: request.params ?? {}, job: request.job }),
     });
+  }
+
+  /** The timeline of a job in flight, joined with the machine's own VRAM meter. */
+  progress(jobId: string, since?: number): Promise<JobProgressResponse> {
+    const query = since === undefined ? '' : `?since=${since}`;
+    return this.#call<JobProgressResponse>(`/v1/jobs/${encodeURIComponent(jobId)}${query}`);
+  }
+
+  gpu(since?: number): Promise<GpuTelemetry> {
+    return this.#call<GpuTelemetry>(`/v1/gpu${since === undefined ? '' : `?since=${since}`}`);
   }
 
   stop(armId: string): Promise<{ arm: ArmSummary }> {

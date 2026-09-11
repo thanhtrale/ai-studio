@@ -303,7 +303,7 @@ def _release_connectors_after_use(pipe: Any) -> Any:
     return pipe.connectors.register_forward_hook(hook)
 
 
-def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
+def generate(pipe: Any, job: Job, model_dir: Path, progress: Any | None = None) -> GenerationReport:
     """Encode, denoise and decode as three stages, releasing the card between them.
 
     Peak VRAM is then the largest single stage rather than the sum of all three,
@@ -313,10 +313,29 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
     from diffusers.utils import encode_video
 
     from .loading import host_rss_gib
+    from .progress import JobProgress
     from .stages import DECODE_TIMESTEP, StageReport, encode, enter_decode, enter_denoise, release, stage
+
+    # A caller with no interest in progress -- the benchmark harness -- gets a
+    # record that is written and never read, rather than a branch at every step.
+    progress = progress if progress is not None else JobProgress()
 
     seed = job.seed if job.seed >= 0 else random.randrange(2**31 - 1)
     generator = torch.Generator("cuda").manual_seed(seed)
+
+    # Which denoising round the step callback is currently reporting. There are
+    # up to three -- the base pass and one tail per upsampler -- and they share
+    # one callback, so it has to be told which one it is in.
+    round_state = {"key": "denoise", "total": len(DISTILLED_SIGMA_VALUES), "index": 0, "last": 0.0}
+
+    def begin_round(key: str, label: str, detail: str, total: int) -> None:
+        round_state.update(key=key, total=total, index=0, last=time.perf_counter())
+        progress.start(key, label, detail)
+        progress.meter(key, label, total, detail)
+        progress.start(f"{key}-1", "step 1", parent=key)
+
+    def end_round() -> None:
+        progress.finish_step(round_state["key"])
 
     marks: list[float] = []
     peak_rss = host_rss_gib()
@@ -330,8 +349,20 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
         last = now - (marks[-2] if len(marks) > 1 else denoise_started)
         from .loading import vram_spill_gib
 
+        key = str(round_state["key"])
+        index = int(round_state["index"]) + 1
+        round_state["index"] = index
+        progress.finish_step(f"{key}-{index}", seconds=now - float(round_state["last"]))
+        round_state["last"] = now
+        progress.advance(key, index)
+        # The end of one step is the start of the next, which is the only signal
+        # the pipeline offers -- there is no on_step_begin.
+        if index < int(round_state["total"]):
+            progress.start(f"{key}-{index + 1}", f"step {index + 1}", parent=key)
+        progress.sample_vram()
+
         print(
-            f"[ltx25] step {step + 1}/{len(DISTILLED_SIGMA_VALUES)} "
+            f"[ltx25] step {step + 1}/{round_state['total']} "
             f"{last:.1f}s vram={torch.cuda.memory_reserved() / 1024**3:.2f}GiB "
             f"spill={vram_spill_gib():.2f}GiB rss={peak_rss:.1f}GiB",
             flush=True,
@@ -351,18 +382,25 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
             # `enable_prompt_enhancement` would never fire.
             from .refine import enhanced_prompt
 
-            with stage("enhance", reports):
-                prompt = enhanced_prompt(
-                    pipe,
-                    model_dir,
-                    job.prompt,
-                    image=Image.open(job.image_path).convert("RGB") if job.image_path else None,
-                    seed=seed,
-                )
+            looked = " · looked at the reference image" if job.image_path else ""
+            with progress.step("enhance", "Prompt enhancer rewrote the prompt") as reported:
+                with stage("enhance", reports):
+                    prompt = enhanced_prompt(
+                        pipe,
+                        model_dir,
+                        job.prompt,
+                        image=Image.open(job.image_path).convert("RGB") if job.image_path else None,
+                        seed=seed,
+                    )
+                reported.detail(f"{len(prompt)} chars{looked}")
+                reported.note(prompt, replaces=job.prompt)
             print(f"[ltx25] enhanced prompt: {prompt[:160]}...", flush=True)
 
         # --- stage 1: text -------------------------------------------------
-        embeds = encode(pipe, prompt, job.negative_prompt, reports)
+        from .stages import MAX_PROMPT_TOKENS
+
+        with progress.step("encode", "Encode prompt", f"{MAX_PROMPT_TOKENS} tokens"):
+            embeds = encode(pipe, prompt, job.negative_prompt, reports)
 
         # --- stage 2: denoise ----------------------------------------------
         denoise_pipe, image_kwargs = _denoise_pipeline(pipe, job)
@@ -404,6 +442,13 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
             return video_latents.detach(), sound_latents.detach()
 
         with stage("denoise", reports):
+            begin_round(
+                "denoise",
+                "Denoise",
+                f"{len(DISTILLED_SIGMA_VALUES)} steps · {job.width}×{job.height}"
+                f" · {type(denoise_pipe).__name__}",
+                len(DISTILLED_SIGMA_VALUES),
+            )
             latents, audio_latents = denoise(
                 denoise_pipe,
                 **image_kwargs,
@@ -411,6 +456,7 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
                 height=job.height,
                 num_frames=job.num_frames,
             )
+            end_round()
 
             if job.spatial_upsample:
                 # The documented two-stage recipe: half-resolution pass, x2 latent
@@ -419,7 +465,16 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
                 # detail rather than interpolating it.
                 from .refine import upsample_spatial
 
-                latents = upsample_spatial(pipe, model_dir, latents)
+                with progress.step(
+                    "spatial", "Spatial ×2", f"{job.width * 2}×{job.height * 2}"
+                ):
+                    latents = upsample_spatial(pipe, model_dir, latents)
+                begin_round(
+                    "spatial-refine",
+                    "Spatial refine",
+                    f"{len(STAGE_2_DISTILLED_SIGMA_VALUES)} steps · {job.width * 2}×{job.height * 2}",
+                    len(STAGE_2_DISTILLED_SIGMA_VALUES),
+                )
                 latents, audio_latents = denoise(
                     pipe,
                     num_frames=job.num_frames,
@@ -428,16 +483,27 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
                     audio_latents=audio_latents,
                     noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0],
                 )
+                end_round()
 
             if job.temporal_upsample:
                 from .refine import upsample_temporal
 
-                latents = upsample_temporal(pipe, model_dir, latents)
+                with progress.step("temporal", "Temporal ×2") as reported:
+                    latents = upsample_temporal(pipe, model_dir, latents)
                 # The latent tensor is [B, C, frames, H, W] with time compressed
                 # by 8, so the new frame count is read back from it rather than
                 # assumed -- the upsampler decides how many frames it produced.
                 frames = (latents.shape[2] - 1) * TEMPORAL_MULTIPLE + 1
                 output_frame_rate = job.frame_rate * frames / job.num_frames
+                reported.detail(
+                    f"{frames} frames @{output_frame_rate:.0f} fps, same duration"
+                )
+                begin_round(
+                    "temporal-refine",
+                    "Temporal refine",
+                    f"{len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES)} steps · {job.width}×{job.height}",
+                    len(TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES),
+                )
                 latents, audio_latents = denoise(
                     pipe,
                     num_frames=frames,
@@ -447,6 +513,7 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
                     audio_latents=audio_latents,
                     noise_scale=TEMPORAL_ROUND_DISTILLED_SIGMA_VALUES[0],
                 )
+                end_round()
 
         if connector_hook is not None:
             connector_hook.remove()
@@ -458,20 +525,28 @@ def generate(pipe: Any, job: Job, model_dir: Path) -> GenerationReport:
         release()
 
         # --- stage 3: decode ------------------------------------------------
-        enter_decode(pipe)
-        with stage("decode", reports):
-            video, audio, sample_rate = _decode(pipe, latents, audio_latents)
+        with progress.step("decode", "Decoders onto the card"):
+            enter_decode(pipe)
+            with stage("decode", reports):
+                video, audio, sample_rate = _decode(pipe, latents, audio_latents)
         del latents, audio_latents
 
     denoised = time.perf_counter()
-    job.out_path.parent.mkdir(parents=True, exist_ok=True)
-    encode_video(
-        video[0],
-        fps=int(round(output_frame_rate)),
-        output_path=str(job.out_path),
-        audio=audio[0].float().cpu() if audio is not None else None,
-        audio_sample_rate=sample_rate,
-    )
+    frame_count = int(video[0].shape[0])
+    with progress.step(
+        "mux",
+        "Mux video and audio",
+        f"{frame_count} frames · {frame_count / max(output_frame_rate, 1e-6):.2f} s"
+        f" @{output_frame_rate:.0f} fps",
+    ):
+        job.out_path.parent.mkdir(parents=True, exist_ok=True)
+        encode_video(
+            video[0],
+            fps=int(round(output_frame_rate)),
+            output_path=str(job.out_path),
+            audio=audio[0].float().cpu() if audio is not None else None,
+            audio_sample_rate=sample_rate,
+        )
 
     per_step = [b - a for a, b in zip(marks, marks[1:])]
     prologue = reports[0].seconds if reports else (denoised - started)
