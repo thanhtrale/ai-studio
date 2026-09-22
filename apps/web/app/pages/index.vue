@@ -56,7 +56,7 @@ const FUNCTIONS: StudioFunction[] = [
   {
     key: 'text',
     title: 'Text',
-    blurb: 'A llama.cpp arm is scaffolded. No console yet.',
+    blurb: 'Qwen3.6-35B-A3B on llama.cpp, thinking on or off, 60 tokens a second. The arm runs; no console yet.',
     modality: 'text',
     capability: null,
     to: null,

@@ -55,9 +55,10 @@ Each directory under `arms/` with an `arm.yaml` is an arm:
 
 ```
 arms/
-  text-llamacpp-cu124/     arm.yaml  params.schema.json  bin/     <- you place binaries here
-  image-qwen-edit-sdcpp/   arm.yaml  params.schema.json  bin/  .venv/
-  video-ltx25-diffusers/   arm.yaml  params.schema.json  .venv/  <- its own interpreter
+  text-qwen36-a3b-llamacpp/  arm.yaml  params.schema.json  bin/  .venv/  <- you place binaries here
+  image-qwen-edit-sdcpp/     arm.yaml  params.schema.json  bin/  .venv/
+  video-ltx25-diffusers/     arm.yaml  params.schema.json  .venv/        <- its own interpreter
+  text-llamacpp-cu124/       arm.yaml  params.schema.json               <- a scaffold; see below
 ```
 
 `bin/`, `build/` and `.venv/` are git-ignored. Each arm's README says which release to download. Two arms may wrap the same runtime at different versions built against different CUDA toolkits — they resolve their libraries from their own directory and do not interfere.
@@ -69,7 +70,13 @@ The manifest declares two things that matter most:
 | `protocol` | `openai`, `comfy`, `cli`, `native` | who speaks the studio's job contract. The first three need no code in the arm |
 | `lifecycle` | `resident`, `oneshot` | a long-running server, or a process per unit of work that exits and returns its VRAM |
 
-Adding an ollama arm is a manifest and nothing else.
+Adding an ollama arm is a manifest and nothing else — in principle. In practice
+only `native` is implemented today: the supervisor posts a job to an arm's
+`/generate` and polls its `/progress`, and an `openai` or `comfy` arm has
+neither. `text-llamacpp-cu124` is the scaffold that declared `openai`;
+`text-qwen36-a3b-llamacpp` is the text arm that actually runs, and it wraps
+`llama-server` in a native process for the same reason the image arm wraps
+`sd-server` — the timeline.
 
 Model weights and generated output live under `storage/`, which is git-ignored apart from its directory skeleton.
 

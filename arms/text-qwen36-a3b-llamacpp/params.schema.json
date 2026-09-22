@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Qwen3.6-35B-A3B (llama.cpp) start parameters",
+  "description": "Start-time configuration only. These values are substituted into the launch command and decide how the child process places its weights, so changing any of them restarts the arm. Per-job values (the messages, max tokens, sampling, whether the model may think) are sent to the running arm as a job and are validated by the arm itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      "description": "The GGUF, relative to the managed storage directory. Installed: Unsloth's UD-Q4_K_XL, 20.8 GiB. Any quantisation of the same model works, but the cpuMoe default was measured for this one: a smaller file wants fewer layers' experts in RAM, a larger one more."
+    },
+    "mmproj": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen3.6-35b-a3b/mmproj-F16.gguf",
+      "description": "The vision projector, relative to the managed storage directory. Loaded only when vision is true; a launch placeholder cannot be omitted conditionally, so this always has a value and vision decides whether it applies."
+    },
+    "vision": {
+      "type": "string",
+      "enum": ["false", "true"],
+      "default": "false",
+      "description": "Load the vision projector so the child can read images. Off by default: the job contract is text, and the projector costs VRAM every text job would pay for nothing."
+    },
+    "contextSize": {
+      "type": "integer",
+      "minimum": 4096,
+      "maximum": 262144,
+      "default": 65536,
+      "description": "Tokens of context the child reserves up front. The model was trained to 262144 and the whole of it fits this card: 20 KiB per token at f16 (1280 MiB at 65536, 5120 at 262144), paid at load whether or not a job uses it. Measured by filling it: 262144 fits with kvCacheType q8_0 and cpuMoe 26 (13959 MiB, 45 tok/s after a 240k prompt), or f16 and cpuMoe 30; at cpuMoe 22 it spills silently and generation falls to 17 tok/s. 131072 fits at f16 with cpuMoe 22."
+    },
+    "gpuLayers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999,
+      "default": 999,
+      "description": "Layers whose attention and dense weights go to the card. 999 is all of them, and is what cpuMoe assumes: the experts are the part that does not fit, not the layers."
+    },
+    "cpuMoe": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 40,
+      "default": 22,
+      "description": "Layers (of 40) whose MoE expert weights stay in host RAM, counted from the first. This is the arm's performance lever. Measured at 65k context, f16 KV, on a 16 GiB card: 20 -> 15.7 GiB on the card, 1281 tok/s prompt, 64 tok/s generation, and 0.7 GiB from the edge where Windows starts paging VRAM in silence; 22 -> 14.7 GiB, 1351 and 63; 24 -> 13.8 GiB, 1202 and 61. The child's own --fit placement is off in this arm because it measured at 96 and 24. Each layer is about 470 MiB, so every 24k tokens of f16 context above 65536 wants one more layer here: 26 for 262144 at q8_0, 30 at f16."
+    },
+    "flashAttention": {
+      "type": "string",
+      "enum": ["auto", "on", "off"],
+      "default": "auto",
+      "description": "The child's --flash-attn. auto enables it where the backend supports it, which on this card it does."
+    },
+    "threads": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 128,
+      "default": -1,
+      "description": "CPU threads for the experts that live in RAM. -1 lets the child choose, which is the physical core count."
+    },
+    "kvCacheType": {
+      "type": "string",
+      "enum": ["f16", "bf16", "q8_0", "q4_0"],
+      "default": "f16",
+      "description": "Data type of the KV cache, for both K and V. f16 is the child's default. q8_0 halves it -- 14.1 GiB against f16's 14.7 at 65k, 2720 against 5120 MiB of cache at 262144 -- with no measurable change in speed, and is the way to the full context on this card."
+    }
+  }
+}

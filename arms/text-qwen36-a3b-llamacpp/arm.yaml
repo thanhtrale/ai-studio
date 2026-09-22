@@ -1,0 +1,66 @@
+id: text-qwen36-a3b-llamacpp
+name: Qwen3.6-35B-A3B (llama.cpp, CUDA 13.3)
+modality: text
+protocol: native
+# Resident: llama-server reads the whole 21 GiB file before it answers, and a
+# job in the same configuration is brokered onto the loaded child in 0.0 s
+# rather than paying that again.
+lifecycle: resident
+# No capability yet. The job contract this arm answers -- a chat, sampling,
+# thinking on or off -- is documented in its README and exercised by its tests,
+# but there is no text console to name a `text.generate` capability for. The
+# home page shows the arm as "no console yet", which is the true state; the
+# supervisor's own job route can drive it in the meantime.
+
+resources:
+  gpu: exclusive
+  # Measured, not estimated: whole-card use on a 16376 MiB RTX 4080 with the
+  # default placement (experts of 22 of 40 layers in RAM, 65k context, f16 KV)
+  # was 14757 MiB with a desktop holding 2190 MiB of that. The whole card
+  # rather than this arm's share -- a GeForce card under Windows will not
+  # attribute memory per process -- so it is the figure to budget against.
+  vramEstimateMb: 14800
+
+launch:
+  cwd: .
+  # Own interpreter, like every other arm -- though this one has no third-party
+  # dependencies at all. The model runs in a child process written in C++; this
+  # process only translates for it.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen_text"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--model"
+    - "{{model}}"
+    - "--mmproj"
+    - "{{mmproj}}"
+    - "--vision"
+    - "{{vision}}"
+    - "--ctx-size"
+    - "{{contextSize}}"
+    - "--gpu-layers"
+    - "{{gpuLayers}}"
+    - "--cpu-moe"
+    - "{{cpuMoe}}"
+    - "--flash-attn"
+    - "{{flashAttention}}"
+    - "--threads"
+    - "{{threads}}"
+    - "--kv-cache-type"
+    - "{{kvCacheType}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+
+health:
+  type: http
+  # The arm binds and answers before the child is started, so this covers
+  # process start only. Reading the weights happens on the first job.
+  path: /healthz
+  timeoutMs: 60000
+
+params: ./params.schema.json
