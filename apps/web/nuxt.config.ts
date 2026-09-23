@@ -44,5 +44,8 @@ export default defineNuxtConfig({
     supervisorUrl: `http://${supervisorHost}:${supervisorPort}`,
     supervisorToken: process.env['AISTUDIO_SUPERVISOR_TOKEN'] ?? '',
     storageDir,
+    // The LAN transfer listener: off until the LAN page turns it on, and the only
+    // socket this studio ever opens beyond loopback.
+    lanPort: Number(process.env['AISTUDIO_LAN_PORT'] ?? 3001),
   },
 });

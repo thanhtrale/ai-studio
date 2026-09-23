@@ -56,6 +56,7 @@ Each directory under `arms/` with an `arm.yaml` is an arm:
 ```
 arms/
   text-qwen36-a3b-llamacpp/  arm.yaml  params.schema.json  bin/  .venv/  <- you place binaries here
+  text-gemma4-26b-a4b-llamacpp/ arm.yaml params.schema.json bin/ .venv/
   image-qwen-edit-sdcpp/     arm.yaml  params.schema.json  bin/  .venv/
   video-ltx25-diffusers/     arm.yaml  params.schema.json  .venv/        <- its own interpreter
   text-llamacpp-cu124/       arm.yaml  params.schema.json               <- a scaffold; see below
@@ -89,6 +90,7 @@ Every view has a URL and every page is rendered on the server first — there is
 | `/` | what the studio can do, one card per function. A card says *no arm discovered* or *no console yet* rather than pretending |
 | `/generate/image` | the Qwen-Image-Edit console. Same two parameters, and a batch: one request, several files, each filed on its own |
 | `/generate/video` | the LTX-2.5 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
+| `/analyze/block` | a Figma frame and a Jira ticket, read separately and then compared. See below |
 | `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
 
 Arms are a drawer rather than a route, and it is there for inspection rather than operation: **nobody starts an arm by hand**. See the broker below.
@@ -102,6 +104,31 @@ The console's right-hand column is what makes a minutes-long run bearable. It ca
 
 Shared UI lives in `apps/web/app/components/ui/` — button, field, input, select, checkbox, card, badge, alert, modal, drawer. Pages compose those rather than restyling controls, which is what keeps one form looking like the next.
 
+## Requirements analysis
+
+The first feature here whose logic is **not** in an arm. `/analyze/block` takes a Figma frame and a Jira ticket and produces a consolidated requirement, the disagreements between the two, and a proposed Universal Editor content model for an AEM Edge Delivery block. The arm is a text endpoint and nothing else: every instruction, schema and rule lives in `apps/web/server/analysis/`, so swapping `text-qwen36-a3b-llamacpp` for `text-gemma4-26b-a4b-llamacpp` is a dropdown rather than a change.
+
+**The design is the source of truth.** Where the two sources disagree, the design's reading becomes the requirement and the ticket's becomes a gap. That only means anything if it is checkable, so every statement carries the node id or ticket passage it came from — and those ids are checked against what the sources actually contained. A statement citing an id that is not there is demoted to an inference, not reported as a requirement. That check is code, not prompt wording.
+
+**Four passes, and the first two read one source each.** Pass 1 sees the design with the ticket unseen; pass 2 sees the ticket with the design unseen; pass 3 diffs the two structured lists they produced; pass 4 models. The isolation is the whole design: a model handed both at once writes one fluent description in which every disagreement has quietly been resolved by assumption, and the disagreements are the product. There is no pass that writes prose — `requirements.md` is rendered from pass 3's JSON, because a model asked to prettify its own output is one more place for a sentence to appear that is not in the data.
+
+```
+storage/analyses/<id>/
+  analysis.json      state, arm, timings
+  design.json        the digest, its node ids, what the reduction dropped
+  ticket.json        the normalised ticket, cut into citable passages
+  passes/p1.json …   each pass's raw reply and parsed value
+  requirements.md    the readable consolidation
+  gaps.json          gaps and inferences
+  _<block>.json      definitions / models / filters, ready for blocks/<name>/
+```
+
+Sources are written **before** the first pass, not after the last: the run registry is module state and a Nuxt reload empties it, so an analysis interrupted at pass 3 still leaves its digest and its ticket readable. A record still saying *running* with nothing running it is reported as failed rather than as a spinner that never stops.
+
+**Figma is reached over its Dev Mode MCP server** at `http://127.0.0.1:3845/mcp`, which lives inside the Figma desktop application — so that application must be running, with the local MCP server enabled in its preferences and the file open. Three separate failures are reported separately, because each needs something different: nothing listening, the server refusing the node, and a call that hung. `node scripts/figma-stub.mjs` serves a fixed frame on the same port, which is how the console is worked on without Figma at all.
+
+**Jira is imported rather than called.** Its issue view exports Word, XML and Print — not JSON — so the entry point is a file, and the file's name lies: the "Word" export is HTML in a `.doc`. The format is sniffed from the content. XML is the one to prefer and the one the parser is best at; it is the only path carrying comments, which matter more than they look, because a requirement agreed in a thread and never written back into the description exists only there.
+
 ## The library
 
 `storage/` **is** the index. A file's path relative to it is its identity, and a JSON sidecar under `storage/library/` mirrors that path with what the studio knows about it:
@@ -112,6 +139,7 @@ storage/
   outputs/  2026-09-11/123857-0ce45c0d.mp4     <- generations, filed by the day they were made
             bench/bench-bf16-group-stream-0.mp4   <- whatever a script wrote, in its own folder
   library/  outputs/2026-09-11/123857-0ce45c0d.mp4.json
+  analyses/ analysis-20260922-a1b2c3d4/         <- requirements analyses; not media, and not scanned
 ```
 
 That choice is what lets the library show files it never created: a clip written by `bench.py` appears with no registration step, and lists with what the filesystem knows. A record adds the rest — job id, arm, prompt, the prompt the enhancer actually sent, the reference image, the settings, and the run's own report — which is what makes *use these settings* reproduce a run rather than approximate it.
@@ -166,4 +194,11 @@ npm run lint
 npm run typecheck  # every workspace, web included
 ```
 
-Integration tests spawn real processes and real listeners, so they take longer than the rest.
+Integration tests spawn real processes and real listeners, so they take longer than the rest. `apps/web/server/analysis/design/mcp.integration.test.ts` runs a real MCP server over real HTTP in the test process, and declares `// @vitest-environment node` to do it: the web project's default environment is happy-dom, whose `fetch` is a browser's and refuses a cross-origin request to a loopback port — which is what the server side of this application does all day.
+
+The Python arms have their own suites, which `npm test` does not run:
+
+```powershell
+cd arms/text-qwen36-a3b-llamacpp;    .\.venv\Scripts\python.exe -m pytest -q
+cd arms/text-gemma4-26b-a4b-llamacpp; .\.venv\Scripts\python.exe -m pytest -q
+```

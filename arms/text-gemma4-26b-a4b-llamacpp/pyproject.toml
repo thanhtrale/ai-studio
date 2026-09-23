@@ -1,0 +1,44 @@
+[project]
+name = "arm-gemma-text"
+version = "0.1.0"
+description = "ai-studio text arm hosting Gemma 4 26B-A4B via llama-server"
+requires-python = ">=3.12"
+# Nothing. The model runs in a child process written in C++, and everything
+# this arm does -- HTTP in both directions, a server-sent event stream, process supervision -- is
+# in the standard library. The venv exists so the launch command names a known
+# interpreter, not because anything needs installing into it.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arm_gemma_text"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src"]
+
+[tool.ruff.lint]
+# Selected so the `noqa` comments in this arm mean something: each one marks a
+# rule that is genuinely on and genuinely being waived for a stated reason --
+# a subprocess with a fixed argv, a loopback URL, a method name the standard
+# library fixes for us.
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "S", "BLE", "RUF"]
+ignore = [
+  # `Busy` and `ChildFailed` read as what they are at the call site, and match
+  # how the image and video arms name the same two conditions.
+  "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and the stand-in server is deliberately unauthenticated.
+"tests/*" = ["S101", "S104", "S310"]

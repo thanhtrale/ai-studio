@@ -16,7 +16,7 @@ export const ARM_GPU_MODES = ['exclusive', 'none'] as const;
  * nothing is offered nowhere, which is the right answer for a scaffold whose
  * only working endpoint is its health check.
  */
-export const ARM_CAPABILITIES = ['image.generate', 'video.generate'] as const;
+export const ARM_CAPABILITIES = ['image.generate', 'video.generate', 'text.generate'] as const;
 
 export type ArmModality = (typeof ARM_MODALITIES)[number];
 export type ArmProtocol = (typeof ARM_PROTOCOLS)[number];

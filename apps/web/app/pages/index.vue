@@ -9,6 +9,7 @@
  */
 import { computed } from 'vue';
 
+import { NuxtLink } from '#components';
 import type { ArmCapability, ArmModality } from '@ai-studio/arm-contract';
 
 import MediaThumb from '../components/MediaThumb.vue';
@@ -54,19 +55,22 @@ const FUNCTIONS: StudioFunction[] = [
     glyph: '▣',
   },
   {
-    key: 'text',
-    title: 'Text',
-    blurb: 'Qwen3.6-35B-A3B on llama.cpp, thinking on or off, 60 tokens a second. The arm runs; no console yet.',
+    key: 'analyze',
+    title: 'Requirements analysis',
+    blurb:
+      'A Figma frame and a Jira ticket, read separately and then compared. Reports what the ticket ' +
+      'missed, what it got wrong against the design, and proposes the Universal Editor model for an ' +
+      'AEM Edge Delivery block.',
     modality: 'text',
-    capability: null,
-    to: null,
-    glyph: '≡',
+    capability: 'text.generate',
+    to: '/analyze/block',
+    glyph: '◇',
   },
 ];
 
 function status(entry: StudioFunction): { tone: 'ok' | 'warn' | 'neutral'; label: string } {
-  // A card is about a console, so it counts arms that can serve one -- except
-  // the text card, which has no console and no capability to count.
+  // A card is about a console, so it counts arms that can serve one. A card that
+  // declares no capability yet falls back to the modality, which is all it has.
   const candidates = arms.value.filter((arm) =>
     entry.capability ? arm.capabilities.includes(entry.capability) : arm.modality === entry.modality,
   );
@@ -99,7 +103,7 @@ const recent = computed(() =>
 
       <section class="grid gap-4 sm:grid-cols-2">
         <component
-          :is="entry.to ? 'NuxtLink' : 'div'"
+          :is="entry.to ? NuxtLink : 'div'"
           v-for="entry in FUNCTIONS"
           :key="entry.key"
           :to="entry.to ?? undefined"
@@ -140,6 +144,22 @@ const recent = computed(() =>
                   <MediaThumb :item="entry" kind-badge />
                 </li>
               </ul>
+            </div>
+          </UiCard>
+        </NuxtLink>
+
+        <NuxtLink to="/lan" class="block">
+          <UiCard interactive class="h-full">
+            <div class="space-y-3 p-5">
+              <div class="flex items-start justify-between gap-3">
+                <span class="text-xl text-indigo-400">&#8646;</span>
+                <UiBadge tone="neutral">local network</UiBadge>
+              </div>
+              <h2 class="text-base font-semibold text-slate-100">LAN transfer</h2>
+              <p class="text-sm text-slate-400">
+                Send files to another machine running the studio on the same network, or collect what it sent
+                here. No login: the receiver opens its inbox and reads out an address.
+              </p>
             </div>
           </UiCard>
         </NuxtLink>

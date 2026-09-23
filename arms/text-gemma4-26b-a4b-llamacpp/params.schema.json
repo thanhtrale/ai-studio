@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Gemma 4 26B-A4B (llama.cpp) start parameters",
+  "description": "Start-time configuration only. These values are substituted into the launch command and decide how the child process places its weights, so changing any of them restarts the arm. Per-job values (the messages, max tokens, sampling) are sent to the running arm as a job. The defaults below were measured on this card, not estimated; see the README for the readings and for the one place the arithmetic that preceded them turned out to be wrong.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/gemma-4-26b-a4b/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+      "description": "The GGUF, relative to the managed storage directory. Installed: Unsloth's quantisation-aware-trained UD-Q4_K_XL, 13.27 GiB. The QAT build is chosen over the plain one because it is both better at 4 bits and 2.6 GiB smaller, which on a 16 GiB card converts directly into context and into experts that stay on the card."
+    },
+    "mmproj": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/gemma-4-26b-a4b/mmproj-F16.gguf",
+      "description": "The vision projector, relative to the managed storage directory. Loaded only when vision is true; a launch placeholder cannot be omitted conditionally, so this always has a value and vision decides whether it applies."
+    },
+    "vision": {
+      "type": "string",
+      "enum": [
+        "false",
+        "true"
+      ],
+      "default": "false",
+      "description": "Load the vision projector so the child can read images. Off by default: the requirements analysis runs on a text digest of the design, and turning this on is what makes it also request a rendering of the frame. Costs about 1.1 GiB of VRAM that a text-only job pays for nothing."
+    },
+    "contextSize": {
+      "type": "integer",
+      "minimum": 4096,
+      "maximum": 262144,
+      "default": 65536,
+      "description": "Tokens of context the child reserves up front. The model was trained to 262144 and the whole of it fits this card: measured at 13292 MiB whole-card with cpuMoe 12 and q8_0 KV, against 10294 MiB at the 65536 default. That is about 15.6 KiB per token of growth -- three times what this arm's own arithmetic predicted from the architecture, which is why the number here is a reading rather than a calculation. 65536 is the default because most jobs do not need more and the 3 GiB buys nothing for them; raise it when a job's material is genuinely long."
+    },
+    "gpuLayers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999,
+      "default": 999,
+      "description": "Layers whose attention and dense weights go to the card. 999 is all of them, and is what cpuMoe assumes: the experts are the part that does not fit, not the layers."
+    },
+    "cpuMoe": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30,
+      "default": 12,
+      "description": "Layers (of 30) whose MoE expert weights stay in host RAM, counted from the first. This is the arm's performance lever, exactly as on the Qwen arm. Measured: 12 loads and runs at 10294 MiB with 65536 context, and at 13292 MiB with the full 262144 -- in both cases well clear of the edge where WDDM starts paging VRAM in silence. The headroom says a lower number would put more experts on the card and run faster; that has NOT been measured, so it has not been changed."
+    },
+    "flashAttention": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "default": "auto",
+      "description": "The child's --flash-attn. auto enables it where the backend supports it, which on this card it does. It is also what makes a quantised KV cache worth having."
+    },
+    "threads": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 128,
+      "default": -1,
+      "description": "CPU threads for the experts that live in RAM. -1 lets the child choose, which is the physical core count."
+    },
+    "kvCacheType": {
+      "type": "string",
+      "enum": [
+        "f16",
+        "bf16",
+        "q8_0",
+        "q4_0"
+      ],
+      "default": "q8_0",
+      "description": "Data type of the KV cache, for both K and V. q8_0 rather than the child's f16 default, because this model's case is long context. Every reading in this file and in the README was taken at q8_0; f16 has not been measured here."
+    }
+  }
+}

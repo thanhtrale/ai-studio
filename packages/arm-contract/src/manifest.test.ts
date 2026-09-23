@@ -121,10 +121,20 @@ describe('arm manifest', () => {
 capabilities: [text.generate]
 `);
 
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.manifest.capabilities).toEqual(['text.generate']);
+    });
+
+    it('rejects text.generate on an arm of another modality', () => {
+      const result = parseArmManifestYaml(`${RESIDENT_EXAMPLE.replace('modality: text', 'modality: image')}
+capabilities: [text.generate]
+`);
+
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      // There is no text console, so there is no such capability to declare.
       expect(result.issues.map((issue) => issue.path)).toContain('capabilities.0');
+      expect(formatManifestIssues(result.issues)).toMatch(/does not belong to an? image arm/);
     });
 
     it('rejects a capability belonging to another modality', () => {

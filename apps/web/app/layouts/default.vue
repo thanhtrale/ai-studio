@@ -17,7 +17,9 @@ const NAV = [
   { to: '/', label: 'Home' },
   { to: '/generate/image', label: 'Image' },
   { to: '/generate/video', label: 'Video' },
+  { to: '/analyze/block', label: 'Analyze' },
   { to: '/library', label: 'Library' },
+  { to: '/lan', label: 'LAN' },
 ] as const;
 
 const { arms, connection, incumbent, refresh } = useArms();

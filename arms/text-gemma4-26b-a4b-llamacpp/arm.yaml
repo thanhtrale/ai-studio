@@ -1,0 +1,65 @@
+id: text-gemma4-26b-a4b-llamacpp
+name: Gemma 4 26B-A4B (llama.cpp, CUDA 13.3)
+modality: text
+protocol: native
+# Resident, for the same reason the other text arm is: llama-server reads the
+# whole 13 GiB file before it answers, and a second job in the same
+# configuration is brokered onto the loaded child rather than paying that again.
+lifecycle: resident
+
+# The job contract is a chat, which is what the requirements analysis needs and
+# all it needs -- every instruction, schema and rule for that feature lives in
+# the web application. Declaring this is what lets the console offer this arm
+# beside the Qwen one and compare them on the same input.
+capabilities:
+  - text.generate
+
+resources:
+  gpu: exclusive
+  # Measured on this card at the defaults below -- 65536 context, cpuMoe 12,
+  # q8_0 KV -- with the desktop at 0 MiB, so this is very nearly the arm's own
+  # share rather than a whole-card figure inflated by something else.
+  # At the trained maximum of 262144 the same configuration reads 13292 MiB,
+  # which also fits; see the README.
+  vramEstimateMb: 10300
+
+launch:
+  cwd: .
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_gemma_text"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--model"
+    - "{{model}}"
+    - "--mmproj"
+    - "{{mmproj}}"
+    - "--vision"
+    - "{{vision}}"
+    - "--ctx-size"
+    - "{{contextSize}}"
+    - "--gpu-layers"
+    - "{{gpuLayers}}"
+    - "--cpu-moe"
+    - "{{cpuMoe}}"
+    - "--flash-attn"
+    - "{{flashAttention}}"
+    - "--threads"
+    - "{{threads}}"
+    - "--kv-cache-type"
+    - "{{kvCacheType}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+
+health:
+  type: http
+  # The arm binds and answers before the child is started, so this covers
+  # process start only. Reading the weights happens on the first job.
+  path: /healthz
+  timeoutMs: 60000
+
+params: ./params.schema.json

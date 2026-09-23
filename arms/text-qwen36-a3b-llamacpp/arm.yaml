@@ -6,11 +6,13 @@ protocol: native
 # job in the same configuration is brokered onto the loaded child in 0.0 s
 # rather than paying that again.
 lifecycle: resident
-# No capability yet. The job contract this arm answers -- a chat, sampling,
-# thinking on or off -- is documented in its README and exercised by its tests,
-# but there is no text console to name a `text.generate` capability for. The
-# home page shows the arm as "no console yet", which is the true state; the
-# supervisor's own job route can drive it in the meantime.
+# The job contract this arm answers -- a chat, sampling, thinking on or off --
+# is documented in its README and exercised by its tests. Declaring it is what
+# lets a console find an arm to run on: the requirements analysis picks by this
+# capability rather than by modality, which is what makes one arm swappable for
+# another on the same input.
+capabilities:
+  - text.generate
 
 resources:
   gpu: exclusive
