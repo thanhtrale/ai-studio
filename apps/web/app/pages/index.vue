@@ -148,21 +148,6 @@ const recent = computed(() =>
           </UiCard>
         </NuxtLink>
 
-        <NuxtLink to="/lan" class="block">
-          <UiCard interactive class="h-full">
-            <div class="space-y-3 p-5">
-              <div class="flex items-start justify-between gap-3">
-                <span class="text-xl text-indigo-400">&#8646;</span>
-                <UiBadge tone="neutral">local network</UiBadge>
-              </div>
-              <h2 class="text-base font-semibold text-slate-100">LAN transfer</h2>
-              <p class="text-sm text-slate-400">
-                Send files to another machine running the studio on the same network, or collect what it sent
-                here. No login: the receiver opens its inbox and reads out an address.
-              </p>
-            </div>
-          </UiCard>
-        </NuxtLink>
       </section>
     </div>
   </div>
