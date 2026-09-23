@@ -45,7 +45,9 @@ export default defineNuxtConfig({
     supervisorToken: process.env['AISTUDIO_SUPERVISOR_TOKEN'] ?? '',
     storageDir,
     // The LAN transfer listener: off until the LAN page turns it on, and the only
-    // socket this studio ever opens beyond loopback.
+    // TCP socket this studio ever opens beyond loopback.
     lanPort: Number(process.env['AISTUDIO_LAN_PORT'] ?? 3001),
+    // UDP: open inboxes announce themselves here, and an open LAN page listens here.
+    lanDiscoveryPort: Number(process.env['AISTUDIO_LAN_DISCOVERY_PORT'] ?? 3001),
   },
 });

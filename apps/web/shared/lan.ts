@@ -74,3 +74,69 @@ export function parsePeer(raw: string, defaultPort: number): Peer | null {
     port: url.port === '' ? defaultPort : Number(url.port),
   };
 }
+
+// ---- Discovery ------------------------------------------------------------
+
+/**
+ * The UDP port receivers announce themselves on. Fixed rather than derived from
+ * the listener port: a sender has to know where to listen before it knows anyone.
+ */
+export const DEFAULT_DISCOVERY_PORT = 3001;
+
+/** How often an open inbox announces itself, and how long a silent one stays listed. */
+export const BEACON_INTERVAL_MS = 2000;
+export const PEER_TTL_MS = 7000;
+
+/** What an open inbox broadcasts. `id` tells one studio from another on the same host. */
+export interface Beacon {
+  app: 'ai-studio';
+  id: string;
+  hostname: string;
+  port: number;
+}
+
+export interface DiscoveredPeer extends Peer {
+  id: string;
+  hostname: string;
+  seenAt: number;
+}
+
+/** A datagram off the wire -> a beacon, or null for anything else that shares the port. */
+export function parseBeacon(raw: string): Beacon | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const beacon = value as Partial<Beacon> | null;
+  if (
+    beacon?.app !== 'ai-studio' ||
+    typeof beacon.id !== 'string' ||
+    beacon.id === '' ||
+    typeof beacon.hostname !== 'string' ||
+    !Number.isInteger(beacon.port) ||
+    beacon.port! < 1 ||
+    beacon.port! > 65535
+  ) {
+    return null;
+  }
+  return { app: 'ai-studio', id: beacon.id, hostname: beacon.hostname.slice(0, 100), port: beacon.port! };
+}
+
+/** The peers heard from recently, newest name first; stale ones are gone. */
+export function livePeers(peers: Iterable<DiscoveredPeer>, now: number): DiscoveredPeer[] {
+  return [...peers]
+    .filter((peer) => now - peer.seenAt <= PEER_TTL_MS)
+    .sort((a, b) => a.hostname.localeCompare(b.hostname) || a.host.localeCompare(b.host));
+}
+
+/** `192.168.1.20` with `255.255.255.0` -> `192.168.1.255`. */
+export function broadcastAddress(address: string, netmask: string): string | null {
+  const a = address.split('.').map(Number);
+  const m = netmask.split('.').map(Number);
+  if (a.length !== 4 || m.length !== 4 || [...a, ...m].some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return null;
+  }
+  return a.map((octet, i) => (octet | (~m[i]! & 255)) & 255).join('.');
+}

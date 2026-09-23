@@ -3,14 +3,15 @@
  * LAN transfer: send files to another studio on the network, and collect what
  * others sent here.
  *
- * Both sides run the studio. The receiver turns its listener on and reads out an
- * address; the sender types it in and drops files. Uploads go to this studio on
+ * Both sides run the studio. The receiver turns its listener on, which also
+ * announces it on the network; the sender picks it from the list (or types its
+ * address when broadcasts do not get through) and drops files. Uploads go to this studio on
  * loopback, which relays them to the peer as they stream.
  */
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import { formatBytes } from '#shared/library';
-import type { LanStatus } from '#shared/lan';
+import type { DiscoveredPeer, LanStatus } from '#shared/lan';
 
 import UiAlert from '../components/ui/Alert.vue';
 import UiBadge from '../components/ui/Badge.vue';
@@ -77,6 +78,35 @@ watch(peer, (value) => {
   }
   peerCheck.value = null;
 });
+
+// Receivers announcing themselves. Polled while the page is open; the server
+// stops listening for them shortly after the polling stops.
+const discovered = ref<DiscoveredPeer[]>([]);
+const discoveryError = ref<string | null>(null);
+
+async function refreshPeers() {
+  try {
+    discovered.value = (await $fetch<{ peers: DiscoveredPeer[] }>('/api/lan/peers')).peers;
+    discoveryError.value = null;
+  } catch (error) {
+    discovered.value = [];
+    discoveryError.value = describeFetchError(error);
+  }
+}
+
+let peerTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  void refreshPeers();
+  peerTimer = setInterval(refreshPeers, 2000);
+});
+onBeforeUnmount(() => clearInterval(peerTimer));
+
+async function pickPeer(found: DiscoveredPeer) {
+  peer.value = `${found.host}:${found.port}`;
+  // Let the watcher clear the old check first, then confirm this one answers over TCP too.
+  await nextTick();
+  await checkPeer();
+}
 
 const peerCheck = ref<{ ok: boolean; label: string } | null>(null);
 const checking = ref(false);
@@ -176,7 +206,7 @@ const STATE_TONE = { queued: 'neutral', sending: 'accent', done: 'ok', failed: '
         <h1 class="text-2xl font-semibold">LAN transfer</h1>
         <p class="text-sm text-slate-400">
           Move files between two machines running the studio on the same network. No account, no cloud: the
-          receiver opens its inbox, the sender types its address.
+          receiver opens its inbox, the sender picks it from the list.
         </p>
       </header>
 
@@ -186,7 +216,33 @@ const STATE_TONE = { queued: 'neutral', sending: 'accent', done: 'ok', failed: '
           <div class="space-y-4 p-5">
             <UiSectionTitle title="Send" subtitle="To another machine whose inbox is open." />
 
-            <UiField label="Receiver address" for="lan-peer" hint="As its LAN page shows it, e.g. 192.168.1.20:3001">
+            <div class="space-y-2">
+              <p class="text-sm font-medium text-slate-300">Receivers on this network</p>
+              <div v-if="discovered.length" class="flex flex-wrap gap-2">
+                <button
+                  v-for="found in discovered"
+                  :key="found.id"
+                  type="button"
+                  class="rounded-lg border px-3 py-2 text-left text-sm transition-colors"
+                  :class="
+                    peer.trim() === `${found.host}:${found.port}`
+                      ? 'border-indigo-400 bg-indigo-500/10'
+                      : 'border-white/15 hover:border-white/30'
+                  "
+                  @click="pickPeer(found)"
+                >
+                  <span class="block">{{ found.hostname }}</span>
+                  <span class="block font-mono text-xs text-slate-500">{{ found.host }}:{{ found.port }}</span>
+                </button>
+              </div>
+              <p v-else-if="discoveryError" class="text-xs text-rose-300">{{ discoveryError }}</p>
+              <p v-else class="text-xs text-slate-500">
+                Looking… a machine shows up here once it starts receiving. If it never does, the network may block
+                broadcasts: type its address below.
+              </p>
+            </div>
+
+            <UiField label="Receiver address" for="lan-peer" hint="Picked above, or as its LAN page shows it, e.g. 192.168.1.20:3001">
               <div class="flex gap-2">
                 <UiInput id="lan-peer" v-model="peer" placeholder="192.168.1.20:3001" />
                 <UiButton :disabled="!peer.trim() || checking" @click="checkPeer">
