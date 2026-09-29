@@ -21,6 +21,7 @@
 
 import type {
   DesignElement,
+  DesignToken,
   NormalisedDesign,
   NormalisedTicket,
   TicketClaim,
@@ -73,55 +74,147 @@ function ticketText(ticket: NormalisedTicket): string {
   return `${head}\n\n${passages}${comments}${attachments}`.trim();
 }
 
-function designText(design: NormalisedDesign): string {
-  const tokens = design.tokens.length
-    ? `\n\nDESIGN TOKENS used in this frame\n` +
-      design.tokens.map((token) => `- ${token.name} = ${token.value}`).join('\n')
-    : '';
+/**
+ * The same variable appears in every viewport, so it is listed once.
+ *
+ * Three copies of one token list is context spent saying the same thing three
+ * times, and the model has no way to tell that the repetition means nothing.
+ */
+function uniqueTokens(designs: readonly NormalisedDesign[]): DesignToken[] {
+  const seen = new Set<string>();
+  const tokens: DesignToken[] = [];
+  for (const design of designs) {
+    for (const token of design.tokens) {
+      const key = `${token.name}=${token.value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
 
-  const interpretation = design.interpretation
-    ? `\n\nFIGMA'S OWN CODE GUESS -- this is an interpretation, in a framework this project does ` +
-      `not use. Treat it as evidence about styling and grouping only. It carries no node ids, ` +
-      `so nothing in it may be cited.\n${design.interpretation}`
-    : '';
-
-  const reduction = [
+/** The note that keeps a reduction from presenting itself as the whole. */
+function reductionNote(design: NormalisedDesign): string {
+  const parts = [
     design.droppedNodes > 0 ? `${design.droppedNodes} hidden or decorative nodes were removed` : '',
     design.truncatedAtDepth !== undefined ? `the tree was cut at depth ${design.truncatedAtDepth}` : '',
   ].filter(Boolean);
-
-  const note = reduction.length ? `\n\n(This outline is a reduction: ${reduction.join('; ')}.)` : '';
-
-  return `DESIGN OUTLINE -- one line per layer, indented by nesting.
-Format: #<nodeId> <TYPE> "<name>" <width>x<height> [layout/gap] [of:"component"] [variant:"..."] [image-fill] [text:"..."]
-
-${design.digest}${note}${tokens}${interpretation}`;
+  return parts.length ? `\n(This outline is a reduction: ${parts.join('; ')}.)` : '';
 }
 
-/** Pass 1 · the design, with the ticket unseen. */
+const OUTLINE_FORMAT =
+  'Format: #<nodeId> <TYPE> "<name>" <width>x<height> [layout/gap] [of:"component"] ' +
+  '[variant:"..."] [image-fill] [text:"..."]';
+
+/**
+ * The design, as the model is shown it.
+ *
+ * One frame reads exactly as it did before several were possible -- the
+ * single-view wording is unchanged, because its output was measured and there
+ * is no reason to disturb it.
+ *
+ * Several frames are labelled and numbered, and the model is told in the first
+ * line what it is looking at. Without that it has no way to tell one block
+ * drawn three times from three blocks, and the difference decides whether the
+ * content model gets one headline field or three.
+ */
+function designText(designs: readonly NormalisedDesign[]): string {
+  const tokens = uniqueTokens(designs);
+  const tokenText = tokens.length
+    ? `\n\nDESIGN TOKENS used in this frame\n` +
+      tokens.map((token) => `- ${token.name} = ${token.value}`).join('\n')
+    : '';
+
+  // Taken for the primary view only; the others were never asked for it.
+  const guess = designs.find((design) => design.interpretation)?.interpretation;
+  const interpretation = guess
+    ? `\n\nFIGMA'S OWN CODE GUESS -- this is an interpretation, in a framework this project does ` +
+      `not use. Treat it as evidence about styling and grouping only. It carries no node ids, ` +
+      `so nothing in it may be cited.\n${guess}`
+    : '';
+
+  const primary = designs[0];
+  if (designs.length === 1 && primary) {
+    return `DESIGN OUTLINE -- one line per layer, indented by nesting.
+${OUTLINE_FORMAT}
+
+${primary.digest}${reductionNote(primary)}${tokenText}${interpretation}`;
+  }
+
+  const count = designs.length;
+  const views = designs
+    .map((design, at) => {
+      const size = design.width === undefined ? '' : `, ${Math.round(design.width)} wide`;
+      return `=== VIEW ${at + 1} of ${count}: ${JSON.stringify(design.label)}${size} ===
+${design.digest}${reductionNote(design)}`;
+    })
+    .join('\n\n');
+
+  return `DESIGN OUTLINES -- ${count} frames, which are THE SAME BLOCK drawn at ${count} viewports.
+They are not ${count} different blocks. VIEW 1 is the primary reading.
+
+Every view has its own node ids for the same element: the headline in VIEW 1 and the headline in
+VIEW 2 are one headline with two ids. One line per layer, indented by nesting.
+${OUTLINE_FORMAT}
+
+${views}${tokenText}${interpretation}`;
+}
+
+/**
+ * Pass 1 · the design, with the ticket unseen.
+ *
+ * Several viewports are one block, so the answer is still one list. Saying so
+ * is not a nicety: a model shown three frames without being told what they are
+ * enumerates the headline three times, and pass 4 then models three headline
+ * fields for an author to fill in identically.
+ *
+ * What the extra frames buy is `responsive` -- the differences between them.
+ * Those differences are the part of a design a ticket most often fails to
+ * describe, so they are where this feature earns its keep.
+ */
 export function designInventoryPass(
-  design: NormalisedDesign,
+  designs: readonly NormalisedDesign[],
   blockName: string,
 ): PassDefinition<DesignElement[]> {
+  const several = designs.length > 1;
+
+  const multiRule = several
+    ? 'You have been shown the SAME block at several viewports. Produce ONE list: each element ' +
+      'appears once, however many views it is drawn in. Cite the node id from the view where the ' +
+      'element is clearest -- any view’s id is acceptable evidence.\n\n' +
+      'Where an element differs between views -- present in one and absent in another, stacked ' +
+      'rather than side by side, cropped, reordered -- say so in "responsive". Where it is the ' +
+      'same everywhere, leave "responsive" out.\n\n'
+    : '';
+
+  const multiField = several
+    ? ',\n   "responsive": "<how it differs between the views, when it does: \\"hidden below 768\\", ' +
+      '\\"stacks under the image on mobile\\">"'
+    : '';
+
   return {
     id: 'p1',
     step: 'pass1',
     validate: validateElements,
     request: {
-      maxTokens: 6144,
+      // A viewport's worth of extra elements is not extra output -- the list is
+      // the same length -- but `responsive` adds a sentence to many of them.
+      maxTokens: several ? 8192 : 6144,
       system:
         'You read a Figma frame and enumerate what it contains. You are specifying a block for ' +
         'Adobe Experience Manager Edge Delivery Services, so you care about what an author would ' +
         'have to fill in and what a visitor would see -- not about pixel values.\n\n' +
         'You have not been shown any ticket or written requirement, and you must not assume one. ' +
         'Describe only what the outline shows.\n\n' +
+        multiRule +
         NO_INVENTION +
         '\n\n' +
         JSON_ONLY,
       messages: [
         {
           role: 'user',
-          content: `${designText(design)}
+          content: `${designText(designs)}
 
 The block is called "${blockName}".
 
@@ -136,7 +229,7 @@ Return:
    "kind": "frame|text|image|icon|button|link|input|container|other",
    "sample": "<its text, or a short description of the visual>",
    "repeated": <true when the same component appears more than once at this level>,
-   "variant": "<the variant name, when the outline gives one>"}
+   "variant": "<the variant name, when the outline gives one>"${multiField}}
 ]}`,
         },
       ],
@@ -192,6 +285,16 @@ export function reconcilePass(
   claims: readonly TicketClaim[],
   blockName: string,
 ): PassDefinition<ReconcileOutput> {
+  // Only said when there is something to say it about. A rule about responsive
+  // behaviour, given a run that read one frame, invites the model to invent the
+  // breakpoints it was never shown.
+  const responsive = elements.some((element) => element.responsive)
+    ? `\n- A "responsive" note on an element is a reading of the design like any other. Where the
+  ticket never describes that behaviour it is "undocumented"; where the ticket describes it
+  differently it is a "contradiction"; where the design shows a change but not the width it
+  happens at, it is "ambiguous".`
+    : '';
+
   return {
     id: 'p3',
     step: 'pass3',
@@ -230,7 +333,7 @@ Rules for gaps:
 - "contradiction": the two disagree. The requirement states the design's reading; designReading
   and ticketReading both record what each said.
 - "ambiguous": visible in the design but undetermined -- a truncation rule, an empty state, a
-  breakpoint the design does not cover, a limit nobody stated.
+  breakpoint the design does not cover, a limit nobody stated.${responsive}
 
 Every gap needs a question a person can answer. A gap with no question is not reported.
 
@@ -270,6 +373,16 @@ export function contentModelPass(
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 
+  // The failure this prevents is specific and tempting: shown a block that
+  // stacks on mobile, a model reaches for a `mobileLayout` select. Nobody
+  // authors a breakpoint. It is CSS the block already owns, and a field for it
+  // is a question put to every author for ever.
+  const responsiveRule = elements.some((element) => element.responsive)
+    ? 'Some elements carry a `responsive` note. Responsive behaviour is CSS, not content: never ' +
+      'add a field for a viewport, a breakpoint, or a per-device variant of a value. An element ' +
+      'hidden at one width is still one field.\n\n'
+    : '';
+
   return {
     id: 'p4',
     step: 'pass4',
@@ -297,6 +410,7 @@ export function contentModelPass(
         '- Visual variants are NOT content. They belong in the classes group: a field named ' +
         '`classes` (select or multiselect), or `classes_<something>` for a second axis. They reach ' +
         'the block as CSS classes.\n\n' +
+        responsiveRule +
         JSON_ONLY,
       messages: [
         {

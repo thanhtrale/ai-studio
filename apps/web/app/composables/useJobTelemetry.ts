@@ -12,6 +12,35 @@ const JOB_INTERVAL_MS = 700;
 /** Fifteen minutes at a sample a second. Enough for any run this card can finish. */
 const MAX_SAMPLES = 900;
 
+/**
+ * Where a timeline is asked for.
+ *
+ * Two producers report the same `JobProgress`: the supervisor, for a
+ * generation, and this application's own analysis registry. The shape being
+ * identical is deliberate -- it is what lets one composable and one timeline
+ * component drive both -- but the route is not identical, and a caller that
+ * does not say which gets a supervisor that has never heard of its id.
+ */
+const TELEMETRY_ROUTES = {
+  job: '/api/jobs',
+  analysis: '/api/analyze',
+} as const;
+
+export type TelemetrySource = keyof typeof TELEMETRY_ROUTES;
+
+/**
+ * How many polls in a row may miss before the poll gives up.
+ *
+ * A miss is ordinary at the very start: the submit and the first poll race by
+ * a few milliseconds. It is not ordinary for long -- both producers register
+ * inside the request that submits, before anything slow happens, so an id that
+ * is still unknown after this many tries is one that was never registered at
+ * all. A submit refused before registration -- a link that would not parse, no
+ * arm that can serve it -- would otherwise leave this asking every 700ms for
+ * the life of the page.
+ */
+const MAX_CONSECUTIVE_MISSES = 12;
+
 export function useJobTelemetry() {
   const job = ref<JobProgress | null>(null);
   const machine = ref<VramSample[]>([]);
@@ -28,6 +57,8 @@ export function useJobTelemetry() {
   });
 
   let jobId: string | null = null;
+  let jobRoute: string = TELEMETRY_ROUTES.job;
+  let misses = 0;
   let gpuTimer: ReturnType<typeof setInterval> | undefined;
   let jobTimer: ReturnType<typeof setInterval> | undefined;
   let tick: ReturnType<typeof setInterval> | undefined;
@@ -58,7 +89,8 @@ export function useJobTelemetry() {
   async function pollJob(): Promise<void> {
     if (!jobId) return;
     try {
-      const answer = await $fetch<JobProgressResponse>(`/api/jobs/${encodeURIComponent(jobId)}`);
+      const answer = await $fetch<JobProgressResponse>(`${jobRoute}/${encodeURIComponent(jobId)}`);
+      misses = 0;
       job.value = answer.job;
       absorb(answer.gpu);
       // A finished job stops being polled, but the chart keeps running: the
@@ -66,15 +98,27 @@ export function useJobTelemetry() {
       if (answer.job.state === 'done' || answer.job.state === 'failed') stopWatching();
     } catch {
       // The job may not be registered yet -- the submit and the first poll race
-      // by a few milliseconds. Keep asking.
+      // by a few milliseconds. Keep asking, but not for ever: an id nothing
+      // will ever answer for is a submit that was refused before it registered,
+      // and the console reports that failure itself.
+      misses += 1;
+      if (misses >= MAX_CONSECUTIVE_MISSES) stopWatching();
     }
   }
 
-  /** Follow a job that has just been submitted. */
-  function watch(id: string): void {
+  /**
+   * Follow a run that has just been submitted.
+   *
+   * `from` names the producer. It defaults to the supervisor because that is
+   * what most runs are; an analysis reports its own steps from this
+   * application, under the same shape but its own route.
+   */
+  function watch(id: string, from: TelemetrySource = 'job'): void {
     if (!import.meta.client) return;
     stopWatching();
     jobId = id;
+    jobRoute = TELEMETRY_ROUTES[from];
+    misses = 0;
     job.value = null;
     // The chart is per run: what the card held during the last one is not this
     // one's shape, and the peak chips would read the wrong number.
@@ -87,6 +131,7 @@ export function useJobTelemetry() {
     if (jobTimer) clearInterval(jobTimer);
     jobTimer = undefined;
     jobId = null;
+    misses = 0;
   }
 
   onMounted(() => {

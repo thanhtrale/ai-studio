@@ -89,6 +89,34 @@ export interface DigestResult {
 const DEFAULT_MAX_NODES = 400;
 const DEFAULT_MAX_CHARS = 24_000;
 
+/**
+ * Floors, so that reading six viewports does not reduce each to a stub.
+ *
+ * Past this the split stops being a share and starts being a loss: a frame cut
+ * to sixty nodes is no longer a description of the block.
+ */
+const MIN_NODES_PER_VIEW = 120;
+const MIN_CHARS_PER_VIEW = 6_000;
+
+/**
+ * The budget, shared between several views of one block.
+ *
+ * The budget belongs to the context window rather than to the number of
+ * frames, so reading three viewports does not get three times the room. What
+ * the split costs is mostly repetition -- three viewports of one block are
+ * three near-identical trees -- which is why sharing is the right answer and
+ * multiplying is not.
+ *
+ * One view gets exactly the defaults, so the single-frame case is untouched.
+ */
+export function shareDigestBudget(views: number): DigestOptions {
+  const count = Math.max(1, views);
+  return {
+    maxNodes: Math.max(MIN_NODES_PER_VIEW, Math.floor(DEFAULT_MAX_NODES / count)),
+    maxChars: Math.max(MIN_CHARS_PER_VIEW, Math.floor(DEFAULT_MAX_CHARS / count)),
+  };
+}
+
 /** Nodes with no ink: hidden, or faded to nothing. */
 function isInvisible(node: DesignNode): boolean {
   return node.visible === false || node.opacity === 0;

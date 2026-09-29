@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { RelayError } from '../../utils/supervisor';
 import type { DesignNode } from './digest';
-import { buildDigest, describeDigest } from './digest';
-import { figmaLink, parseFigmaLink } from './link';
+import { buildDigest, describeDigest, shareDigestBudget } from './digest';
+import { figmaLink, parseFigmaLink, parseFigmaLinks } from './link';
 
 describe('parseFigmaLink', () => {
   it('reads a design link, normalising the node id to the form the tools take', () => {
@@ -57,6 +57,54 @@ describe('parseFigmaLink', () => {
   it('round-trips through the canonical link', () => {
     const original = 'https://www.figma.com/design/AbCdEf123456/Capella-Web?node-id=123-456';
     expect(figmaLink(parseFigmaLink(original))).toBe(original);
+  });
+});
+
+describe('parseFigmaLinks', () => {
+  it('extracts the links from the text they were pasted in', () => {
+    const references = parseFigmaLinks(
+      'Implement this design from Figma. @https://www.figma.com/design/AbCdEf123456/x?node-id=1-2&m=dev',
+    );
+    expect(references).toEqual([{ fileKey: 'AbCdEf123456', nodeId: '1:2', fileName: 'x' }]);
+  });
+
+  it('reads one per line, keeping the order, because the first is the primary view', () => {
+    const references = parseFigmaLinks(
+      [
+        'https://www.figma.com/design/AbCdEf123456/x?node-id=1-2',
+        'https://www.figma.com/design/AbCdEf123456/x?node-id=3-4',
+      ].join('\n'),
+    );
+    expect(references.map((reference) => reference.nodeId)).toEqual(['1:2', '3:4']);
+  });
+
+  it('refuses with the reason the route has to report', () => {
+    expect(() => parseFigmaLinks('no link here')).toThrow(RelayError);
+    expect(() => parseFigmaLinks('no link here')).toThrow(/no Figma link found/);
+    expect(() =>
+      parseFigmaLinks(
+        [
+          'https://www.figma.com/design/AbCdEf123456/x?node-id=1-2',
+          'https://www.figma.com/design/ZzYyXx987654/y?node-id=3-4',
+        ].join('\n'),
+      ),
+    ).toThrow(/different Figma files/);
+  });
+});
+
+describe('shareDigestBudget', () => {
+  it('gives a single view exactly the defaults', () => {
+    expect(shareDigestBudget(1)).toEqual({ maxNodes: 400, maxChars: 24_000 });
+  });
+
+  it('shares one budget between the views rather than multiplying it', () => {
+    // Three viewports of one block are three near-identical trees; the context
+    // window did not get bigger because the design has breakpoints.
+    expect(shareDigestBudget(3)).toEqual({ maxNodes: 133, maxChars: 8_000 });
+  });
+
+  it('floors the share, so six viewports are not six stubs', () => {
+    expect(shareDigestBudget(6)).toEqual({ maxNodes: 120, maxChars: 6_000 });
   });
 });
 

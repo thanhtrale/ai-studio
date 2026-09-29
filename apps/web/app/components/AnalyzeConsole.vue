@@ -17,8 +17,10 @@ import { computed, ref, watchEffect } from 'vue';
 import type { ArmSummary } from '@ai-studio/arm-contract';
 
 import type { AnalysisResult, NormalisedTicket } from '#shared/analysis';
+import { readFigmaLinks } from '#shared/figma-link';
 
 import JobTimeline from './JobTimeline.vue';
+import Markdown from './Markdown.vue';
 import VramChart from './VramChart.vue';
 import UiAlert from './ui/Alert.vue';
 import UiBadge from './ui/Badge.vue';
@@ -33,7 +35,7 @@ import UiTextarea from './ui/Textarea.vue';
 const props = defineProps<{ arms: ArmSummary[] }>();
 
 const blockName = ref('');
-const designUrl = ref('');
+const designLinks = ref('');
 const pasted = ref('');
 const armId = ref('');
 
@@ -45,7 +47,8 @@ const reading = ref(false);
 const failure = ref('');
 const running = ref(false);
 const result = ref<AnalysisResult | null>(null);
-const tab = ref<'requirements' | 'gaps' | 'model'>('requirements');
+type Tab = 'requirements' | 'gaps' | 'authoring' | 'model';
+const tab = ref<Tab>('requirements');
 
 const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: follow } = useJobTelemetry();
 
@@ -67,8 +70,26 @@ watchEffect(() => {
   if (first && !candidates.value.some((arm) => arm.id === armId.value)) armId.value = first.id;
 });
 
+/**
+ * What the server will make of what has been typed, recomputed as it is typed.
+ *
+ * The same function the route uses, so the console cannot accept a link the
+ * server then refuses. That matters more here than it would elsewhere: a run is
+ * minutes, and a link rejected at the end of one is a link that could have been
+ * rejected before it started.
+ *
+ * Silent on an empty field. Nothing has gone wrong yet.
+ */
+const links = computed(() =>
+  designLinks.value.trim() ? readFigmaLinks(designLinks.value) : { references: [], problems: [] },
+);
+
 const ready = computed(
-  () => Boolean(blockName.value.trim() && designUrl.value.trim() && ticket.value) && candidates.value.length > 0,
+  () =>
+    Boolean(blockName.value.trim() && ticket.value) &&
+    links.value.references.length > 0 &&
+    links.value.problems.length === 0 &&
+    candidates.value.length > 0,
 );
 
 async function readTicket(file?: File): Promise<void> {
@@ -119,8 +140,12 @@ async function analyse(): Promise<void> {
 
   // Chosen here rather than received, so progress can be polled while the
   // request that started it is still open.
+  //
+  // An analysis reports its steps from this application rather than from the
+  // supervisor -- same shape, own route -- so the source has to be named. The
+  // supervisor has never heard of an analysis id.
   const analysisId = newAnalysisId();
-  follow(analysisId);
+  follow(analysisId, 'analysis');
 
   try {
     result.value = await $fetch<AnalysisResult>('/api/analyze', {
@@ -128,7 +153,7 @@ async function analyse(): Promise<void> {
       body: {
         analysisId,
         blockName: blockName.value.trim(),
-        designUrl: designUrl.value.trim(),
+        designLinks: designLinks.value,
         ticket: ticket.value,
         armId: chosenArm.value?.id,
       },
@@ -141,20 +166,36 @@ async function analyse(): Promise<void> {
   }
 }
 
+/**
+ * What is on screen, and what Copy puts on the clipboard.
+ *
+ * The source in both cases, never the rendering: a report is copied in order to
+ * be pasted into a ticket or a pull request, both of which render markdown
+ * themselves, and HTML would arrive there as noise.
+ */
 const artifact = computed(() => {
   const current = result.value;
   if (!current) return '';
   if (tab.value === 'requirements') return current.markdown;
-  if (tab.value === 'gaps') {
-    return JSON.stringify({ gaps: current.gaps, inferences: current.inferences }, null, 2);
-  }
+  if (tab.value === 'gaps') return current.gapsMarkdown;
+  if (tab.value === 'authoring') return current.authoringMarkdown;
   return JSON.stringify(current.model, null, 2);
 });
+
+/** Three of the four are documents. The fourth is a file to paste into a repo. */
+const prose = computed(() => tab.value !== 'model');
 
 const modelFile = computed(() => {
   const name = result.value?.record.blockName ?? 'block';
   return `_${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}.json`;
 });
+
+const tabs = computed(() => [
+  { key: 'requirements' as const, label: 'Requirements' },
+  { key: 'gaps' as const, label: 'Gaps' },
+  { key: 'authoring' as const, label: 'Authoring' },
+  { key: 'model' as const, label: modelFile.value },
+]);
 
 const copied = ref(false);
 async function copy(): Promise<void> {
@@ -178,14 +219,36 @@ async function copy(): Promise<void> {
         <UiInput id="block" v-model="blockName" placeholder="featured-story-card" />
       </UiField>
 
-      <UiField
-        label="Figma node link"
-        for="design"
-        required
-        hint="Select the block's frame in Figma and copy a link to it. A whole file is not a block."
-      >
-        <UiInput id="design" v-model="designUrl" placeholder="https://www.figma.com/design/…?node-id=123-456" />
-      </UiField>
+      <div class="space-y-2">
+        <UiField
+          label="Figma frames"
+          for="design"
+          required
+          hint="One link per frame — desktop, tablet, mobile. Notes around a link are fine. The first is the primary view, and they must all be in one file."
+        >
+          <UiTextarea
+            id="design"
+            v-model="designLinks"
+            :rows="3"
+            placeholder="https://www.figma.com/design/…?node-id=123-456"
+          />
+        </UiField>
+
+        <!-- What was recognised, before the button is pressed rather than four
+             minutes after it. -->
+        <ul v-if="links.references.length" class="space-y-0.5 text-xs text-slate-400">
+          <li
+            v-for="(reference, at) in links.references"
+            :key="reference.nodeId"
+            class="flex items-baseline gap-2"
+          >
+            <span class="w-14 shrink-0 text-slate-500">{{ at === 0 ? 'primary' : 'view ' + (at + 1) }}</span>
+            <code class="text-slate-300">{{ reference.nodeId }}</code>
+            <span v-if="reference.fileName" class="truncate">{{ reference.fileName }}</span>
+          </li>
+        </ul>
+        <p v-for="problem in links.problems" :key="problem" class="text-xs text-rose-300">{{ problem }}</p>
+      </div>
 
       <div class="space-y-2">
         <UiField label="Ticket" for="ticket-file" required hint="Jira exports Word, XML or Print. XML carries the most.">
@@ -258,6 +321,8 @@ async function copy(): Promise<void> {
         </p>
         <p class="text-xs text-slate-500">
           The Figma desktop app must be running with its local MCP server enabled, and the file open.
+          Give it every breakpoint and it reports what changes between them — which is the part a
+          ticket most often leaves out.
         </p>
       </div>
 
@@ -273,20 +338,28 @@ async function copy(): Promise<void> {
 
         <div class="flex items-center gap-2">
           <UiButton
-            v-for="entry in (['requirements', 'gaps', 'model'] as const)"
-            :key="entry"
+            v-for="entry in tabs"
+            :key="entry.key"
             size="sm"
-            :active="tab === entry"
-            @click="tab = entry"
+            :active="tab === entry.key"
+            @click="tab = entry.key"
           >
-            {{ entry === 'model' ? modelFile : entry }}
+            {{ entry.label }}
           </UiButton>
           <UiButton size="sm" variant="ghost" class="ml-auto" @click="copy">
             {{ copied ? 'Copied' : 'Copy' }}
           </UiButton>
         </div>
 
-        <pre class="overflow-x-auto rounded border border-white/10 bg-surface-raised p-4 text-xs leading-relaxed text-slate-200"><code>{{ artifact }}</code></pre>
+        <Markdown
+          v-if="prose"
+          :source="artifact"
+          class="rounded border border-white/10 bg-surface-raised p-6"
+        />
+        <pre
+          v-else
+          class="overflow-x-auto rounded border border-white/10 bg-surface-raised p-4 text-xs leading-relaxed text-slate-200"
+        ><code>{{ artifact }}</code></pre>
       </div>
     </section>
 

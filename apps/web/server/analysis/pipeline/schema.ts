@@ -94,6 +94,11 @@ export function validateElements(value: unknown): DesignElement[] {
     if (sample) element.sample = sample;
     const variant = str(item['variant'], `elements[${at}].variant`, { optional: true });
     if (variant) element.variant = variant;
+    // Only asked for when several viewports were read, and optional even then:
+    // most elements are the same at every width, and saying so for each of them
+    // would be noise the later passes have to read past.
+    const responsive = str(item['responsive'], `elements[${at}].responsive`, { optional: true });
+    if (responsive) element.responsive = responsive;
     return element;
   });
 }

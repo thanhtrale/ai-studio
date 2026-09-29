@@ -115,17 +115,29 @@ The first feature here whose logic is **not** in an arm. `/analyze/block` takes 
 ```
 storage/analyses/<id>/
   analysis.json      state, arm, timings
-  design.json        the digest, its node ids, what the reduction dropped
+  design.json        one entry per frame read: the digest, its node ids, what was dropped
   ticket.json        the normalised ticket, cut into citable passages
   passes/p1.json …   each pass's raw reply and parsed value
   requirements.md    the readable consolidation
-  gaps.json          gaps and inferences
+  gaps.md            the same gaps as a list of questions to take to a person
+  gaps.json          gaps and inferences, for a tool rather than a reader
+  authoring.md       the proposed model explained, and what the checks found wrong with it
   _<block>.json      definitions / models / filters, ready for blocks/<name>/
 ```
 
 Sources are written **before** the first pass, not after the last: the run registry is module state and a Nuxt reload empties it, so an analysis interrupted at pass 3 still leaves its digest and its ticket readable. A record still saying *running* with nothing running it is reported as failed rather than as a spinner that never stops.
 
 **Figma is reached over its Dev Mode MCP server** at `http://127.0.0.1:3845/mcp`, which lives inside the Figma desktop application — so that application must be running, with the local MCP server enabled in its preferences and the file open. Three separate failures are reported separately, because each needs something different: nothing listening, the server refusing the node, and a call that hung. `node scripts/figma-stub.mjs` serves a fixed frame on the same port, which is how the console is worked on without Figma at all.
+
+**A block is several frames.** Desktop, tablet and mobile are three frames with three links, and the console takes all of them — as free text, because the links get pasted in whatever sentence they were copied with. `apps/web/shared/figma-link.ts` holds the rules and both sides use it: the console previews what it found as you type, and the route applies the same function, so the console cannot accept a link the server then refuses. Every link must be to one file, and that is not tidiness — a node id is unique within a file and meaningless outside it, and every citation is checked against the union of the views' ids, so a set spanning two files could verify a citation against a frame it never came from.
+
+The budget belongs to the context window rather than to the number of frames, so several views divide it rather than multiplying it; the rendering and Figma's own code guess are taken for the first frame only. What the extra frames buy is what *changes* between them, which is the part of a design a ticket most reliably fails to describe. It is reported as a requirement and, where the ticket is silent, as a gap — but never as a field: nobody authors a breakpoint, so pass 4 is forbidden to model one.
+
+**Four surfaces, because one artefact is not one audience.** `requirements.md` is the specification, read top to bottom. `gaps.md` is the same gaps rearranged into a worklist — a heading per question, the question last — because closing open decisions is a different activity from learning what the block is. `authoring.md` explains the proposed model to whoever has to fill it in: what each field asks for, why an image has two boxes, which fields are not content at all. `_<block>.json` is the file a developer merges.
+
+The console renders the three documents rather than showing their source; `app/utils/markdown.ts` handles the constructs these reports actually use and nothing else, escaping every character of the source before a single rule runs, so nothing arriving from a ticket by way of a language model can become a tag.
+
+`authoring.md` ends with what the checks found wrong with the proposal, and that section is the reason it exists. Pass 4 is the least reliable of the four and its failures parse cleanly — an empty filter, an image with no alt field, a container mixed with an item definition. Run against the first real analysis this repository produced, the checks named both of the defects its own README had already documented by hand.
 
 **Jira is imported rather than called.** Its issue view exports Word, XML and Print — not JSON — so the entry point is a file, and the file's name lies: the "Word" export is HTML in a `.doc`. The format is sniffed from the content. XML is the one to prefer and the one the parser is best at; it is the only path carrying comments, which matter more than they look, because a requirement agreed in a thread and never written back into the description exists only there.
 

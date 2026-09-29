@@ -1,5 +1,5 @@
 import { modelFileName } from '../../../analysis/pipeline/analyse';
-import { GAPS_FILE, REQUIREMENTS_FILE, isAnalysisId, readArtifact, readRecord } from '../../../analysis/store';
+import { AUTHORING_FILE, GAPS_FILE, GAPS_MD_FILE, REQUIREMENTS_FILE, isAnalysisId, readArtifact, readRecord } from '../../../analysis/store';
 
 /**
  * One artefact of a finished analysis.
@@ -22,7 +22,9 @@ export default defineEventHandler(async (event) => {
 
   const names: Record<string, { file: string; type: string; download: string }> = {
     requirements: { file: REQUIREMENTS_FILE, type: 'text/markdown', download: REQUIREMENTS_FILE },
-    gaps: { file: GAPS_FILE, type: 'application/json', download: GAPS_FILE },
+    gaps: { file: GAPS_MD_FILE, type: 'text/markdown', download: GAPS_MD_FILE },
+    'gaps-json': { file: GAPS_FILE, type: 'application/json', download: GAPS_FILE },
+    authoring: { file: AUTHORING_FILE, type: 'text/markdown', download: AUTHORING_FILE },
     model: {
       file: modelFileName(record.blockName),
       type: 'application/json',

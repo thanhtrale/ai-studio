@@ -42,6 +42,27 @@ An analysis crosses several external systems and several model passes, and SHALL
 - **WHEN** any step fails
 - **THEN** that step is marked failed with the reason, the analysis stops, later steps stay pending, and the artefacts produced by the steps that did succeed remain readable
 
+### Requirement: Several viewports are one block
+
+Where an analysis reads several frames, the design inventory SHALL enumerate each element once however many views it appears in, and MAY cite the node id from whichever view showed it. An element that differs between views SHALL record how it differs.
+
+Responsive behaviour is a reading of the design and therefore a requirement like any other -- and where the ticket never describes it, a gap. It SHALL NOT become a content field: no viewport, breakpoint or per-device variant belongs in the Universal Editor model, because nobody authors a breakpoint.
+
+#### Scenario: One headline, three frames
+
+- **WHEN** a block is read at three viewports and each draws the same headline
+- **THEN** the inventory holds one headline element, and the proposed model holds one headline field
+
+#### Scenario: An element that changes between viewports
+
+- **WHEN** an element is present in the desktop frame and absent in the mobile one
+- **THEN** the inventory records the difference, and where the ticket does not describe it the reconciliation reports it as a gap
+
+#### Scenario: A citation from a narrower frame
+
+- **WHEN** an element cites the node id it carries in the second view
+- **THEN** the citation resolves, because every view's ids form one evidence set
+
 ### Requirement: Every requirement carries its evidence
 
 A statement in the consolidated requirement SHALL record where it came from: the design node id, the ticket section, or both. A statement supported by neither SHALL be marked as inferred and SHALL be listed separately from statements that are asserted.
@@ -107,6 +128,58 @@ The analysis SHALL produce a content model for the block in the form `aem-boiler
 
 - **WHEN** the model's output cannot be parsed, or does not carry the three arrays
 - **THEN** the step fails with the parse error and the raw output is kept, rather than an invalid document being offered as a result
+
+### Requirement: An analysis is readable without being parsed
+
+An analysis SHALL produce documents a person reads as well as documents a tool reads, and the console SHALL render the documents rather than display their source. A gap list presented as JSON is a machine artefact shown to a human being.
+
+The gaps SHALL be available as a worklist in their own right -- one heading per gap, its readings under it and its question last -- distinct from the gap section of the requirement document, because closing open decisions is a different activity from learning what the block is.
+
+#### Scenario: The gaps on screen
+
+- **WHEN** a completed analysis is shown
+- **THEN** the gaps are rendered as a document, with each gap's question reachable without reading JSON
+
+#### Scenario: What is copied
+
+- **WHEN** a rendered document is copied
+- **THEN** the markdown source is placed on the clipboard, not the rendering -- the destinations for such a copy render markdown themselves
+
+#### Scenario: Ticket content that looks like markup
+
+- **WHEN** a ticket passage contains HTML, as a pasted ticket may
+- **THEN** it is displayed as text and no tag from it reaches the document
+
+### Requirement: The proposed model is explained, and doubted
+
+The proposed content model SHALL be presented in a form that answers an author's questions -- what each field asks for, which fields are companions of another, which fields are not content -- as well as in the form a developer merges.
+
+That presentation SHALL end with what is demonstrably wrong with the proposal. The fourth pass is the least reliable of the four and its characteristic failures parse cleanly, so nothing else in the pipeline reports them.
+
+#### Scenario: A field pair
+
+- **WHEN** the model holds an asset field and its `<name>Alt` sibling
+- **THEN** they are presented as one control with a second field beneath it, not as two independent things to fill in
+
+#### Scenario: A variant field
+
+- **WHEN** the model holds a `classes` field
+- **THEN** it is presented apart from the content fields and described as reaching the block as a CSS class
+
+#### Scenario: A filter that names nothing
+
+- **WHEN** a proposed filter carries an empty component list
+- **THEN** it is reported as a finding, because the block would author as one nothing can be placed inside
+
+#### Scenario: An image with no alt field
+
+- **WHEN** a proposed asset field has no `<name>Alt` beside it
+- **THEN** it is reported as a finding, and as an accessibility failure rather than a preference
+
+#### Scenario: A proposal that passes every check
+
+- **WHEN** nothing in the proposal trips a check
+- **THEN** the report says so without claiming the proposal is correct
 
 ### Requirement: An analysis is kept
 

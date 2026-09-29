@@ -1,7 +1,7 @@
 import type { AnalysisRequest, NormalisedTicket } from '#shared/analysis';
 
 import { FigmaMcpSource } from '../../analysis/design/source';
-import { parseFigmaLink } from '../../analysis/design/link';
+import { parseFigmaLinks } from '../../analysis/design/link';
 import { analyse } from '../../analysis/pipeline/analyse';
 import type { ArmCaller } from '../../analysis/pipeline/runner';
 import { createRun, forgetRun } from '../../analysis/registry';
@@ -56,8 +56,10 @@ export default defineEventHandler(async (event) => {
   }
 
   return relay(async () => {
-    // Throws with the reason: not Figma, no node in the link, no file key.
-    const reference = parseFigmaLink(body?.designUrl);
+    // Throws with the reason: not Figma, no node in a link, two files at once.
+    // The links arrive as the text they were typed in, and are extracted here
+    // by the same code the console previewed them with.
+    const references = parseFigmaLinks(body?.designLinks);
 
     const client = supervisorClient(event);
     const inventory = await client.inventory();
@@ -95,7 +97,7 @@ export default defineEventHandler(async (event) => {
         blockName,
         armId: arm.id,
         armParams,
-        reference,
+        references,
         ticket,
         design: new FigmaMcpSource(),
         caller,

@@ -42,6 +42,10 @@ export const DESIGN_FILE = 'design.json';
 export const TICKET_FILE = 'ticket.json';
 export const GAPS_FILE = 'gaps.json';
 export const REQUIREMENTS_FILE = 'requirements.md';
+/** The same gaps as `gaps.json`, for a person rather than for a tool. */
+export const GAPS_MD_FILE = 'gaps.md';
+/** The proposed model, explained rather than serialised. */
+export const AUTHORING_FILE = 'authoring.md';
 
 /**
  * An analysis id is a job id with room for a suffix.
