@@ -87,6 +87,65 @@ export function resolveDuration(seconds: number, fps: number): Duration {
   return { numFrames, seconds: numFrames / Math.max(1, fps) };
 }
 
+/**
+ * MiniMax-H3's temporal grid: `17k + 5` frames, and only at 24 fps.
+ *
+ * A different rule from LTX's `8n+1` rather than a different constant in the
+ * same one: H3's first latent block holds five frames and every block after it
+ * holds seventeen, so 5, 22, 39 ... 124 ... 362 are the lengths that exist and
+ * nothing rounds to something between them. The frame rate is not a setting
+ * either -- the audio latents are sized from the clip's duration in seconds,
+ * and the model was trained at one rate.
+ */
+export const H3_FRAME_BLOCK = 17;
+export const H3_FRAME_OFFSET = 5;
+export const H3_FPS = 24;
+/** The trained range, 5 s to 15 s, on the grid above. */
+export const H3_MIN_FRAMES = 124;
+export const H3_MAX_FRAMES = 362;
+
+export function alignH3Frames(frames: number): number {
+  const wanted = Math.max(H3_FRAME_OFFSET, Math.round(frames));
+  // `%` keeps the sign of the dividend in JavaScript, so the gap to the next
+  // valid length has to be folded back into range or this rounds *down*.
+  const gap = (((H3_FRAME_OFFSET - (wanted % H3_FRAME_BLOCK)) % H3_FRAME_BLOCK) + H3_FRAME_BLOCK) %
+    H3_FRAME_BLOCK;
+  return wanted + gap;
+}
+
+export function resolveH3Duration(seconds: number): Duration {
+  const numFrames = Math.min(H3_MAX_FRAMES, alignH3Frames(Math.max(0, seconds) * H3_FPS));
+  return { numFrames, seconds: numFrames / H3_FPS };
+}
+
+/**
+ * H3's native canvas: a 768-pixel short edge under a `768x1344` area cap.
+ *
+ * Offered as a button rather than enforced. Above the cap the model is being
+ * asked for a resolution it was never trained at -- its 2K output comes from a
+ * hosted regeneration pass that is not part of the open release -- and below it
+ * the clip is cheap but soft.
+ */
+export const H3_SHORT_EDGE = 768;
+export const H3_MAX_PIXELS = 768 * 1344;
+
+export function h3Canvas(ratio: number): { width: number; height: number } {
+  const safe = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  let width = safe >= 1 ? H3_SHORT_EDGE * safe : H3_SHORT_EDGE;
+  let height = safe >= 1 ? H3_SHORT_EDGE : H3_SHORT_EDGE / safe;
+
+  const area = width * height;
+  if (area > H3_MAX_PIXELS) {
+    const scale = Math.sqrt(H3_MAX_PIXELS / area);
+    width *= scale;
+    height *= scale;
+  }
+
+  const snapTo = (value: number): number =>
+    Math.max(SPATIAL_MULTIPLE, Math.round(value / SPATIAL_MULTIPLE) * SPATIAL_MULTIPLE);
+  return { width: snapTo(width), height: snapTo(height) };
+}
+
 /** What the transformer actually attends over, and the best single cost signal. */
 export function latentTokens(width: number, height: number, numFrames: number): number {
   const across = Math.floor(width / SPATIAL_MULTIPLE);

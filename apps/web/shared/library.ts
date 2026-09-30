@@ -123,6 +123,22 @@ export interface VideoJobSettings extends CommonSettings {
   enhancePrompt: boolean;
   spatialUpsample: boolean;
   temporalUpsample: boolean;
+  /**
+   * The sampling controls a distilled ComfyUI video arm exposes and a
+   * fixed-schedule diffusers arm does not.
+   *
+   * Optional rather than a third settings shape: they are the same four
+   * numbers the image console already writes, under the same names, and a
+   * record from the arm that has no step count simply omits them.
+   */
+  steps?: number;
+  scheduler?: string;
+  /** The video stream's flow shift. The audio one is derived from it. */
+  flowShift?: number;
+  /** How many clips the one job asked for. */
+  batch?: number;
+  /** Which of them this file is, zero-based. */
+  batchIndex?: number;
 }
 
 export interface ImageJobSettings extends CommonSettings {
@@ -433,8 +449,7 @@ export function mediaSeconds(item: MediaItem): number | null {
   if (!report || !Number.isFinite(report.secondsTotal) || report.secondsTotal <= 0) return null;
 
   const settings = item.meta?.settings;
-  const batch = settings && isImageSettings(settings) ? settings.batch : undefined;
-  const count = item.meta?.output?.count ?? batch ?? 1;
+  const count = item.meta?.output?.count ?? settings?.batch ?? 1;
   return report.secondsTotal / Math.max(count, 1);
 }
 
@@ -546,7 +561,7 @@ export function filterMedia(items: readonly MediaItem[], filter: MediaFilter): M
  */
 export function batchKeyOf(item: MediaItem): string | null {
   const settings = item.meta?.settings;
-  if (!isImageSettings(settings) || settings.batch <= 1) return null;
+  if ((settings?.batch ?? 1) <= 1) return null;
   const jobId = item.meta?.jobId;
   return jobId ? `${item.group}/${jobId}` : null;
 }
@@ -598,8 +613,7 @@ export function stackMedia(items: readonly MediaItem[]): MediaEntry[] {
 }
 
 function batchIndexOf(item: MediaItem): number {
-  const settings = item.meta?.settings;
-  return isImageSettings(settings) ? settings.batchIndex : 0;
+  return item.meta?.settings?.batchIndex ?? 0;
 }
 
 /** Every file behind a list of cards, stacks flattened back out. */
