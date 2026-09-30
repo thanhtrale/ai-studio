@@ -42,6 +42,8 @@ export interface DesignNode {
   text?: string;
   /** The component this is an instance of. */
   component?: string;
+  /** That component's own node id, when the outline gives one up. */
+  componentId?: string;
   /** The variant properties, already flattened to a string. */
   variant?: string;
   hasImageFill?: boolean;

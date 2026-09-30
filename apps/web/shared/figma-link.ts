@@ -79,8 +79,28 @@ export function findFigmaLinks(text: string): string[] {
   return [...text.matchAll(LINK)].map((match) => match[0].replace(TRAILING, ''));
 }
 
-/** Reads one link. The reason, when there is one, says what to do about it. */
-export function readFigmaLink(input: string): FigmaLinkReading {
+/**
+ * A link reduced to its file, with whatever node it happened to name.
+ *
+ * Split out from `readFigmaLink` because two callers want different things
+ * from the same URL. A block analysis needs the node -- a whole file is not a
+ * block -- while a survey of a project is *started* from a file or a page link
+ * and finds its own frames. They must agree about everything else, so
+ * everything else is here.
+ */
+export interface FigmaFileTarget {
+  fileKey: string;
+  /** Canonical form, with a colon. Absent when the link named no node. */
+  nodeId?: string;
+  fileName?: string;
+}
+
+export type FigmaFileReading =
+  | { ok: true; target: FigmaFileTarget }
+  | { ok: false; reason: string };
+
+/** Reads the file, and the node when the link carried one. */
+export function readFigmaFileLink(input: string): FigmaFileReading {
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, reason: 'a Figma link is required' };
 
@@ -108,8 +128,28 @@ export function readFigmaLink(input: string): FigmaLinkReading {
     };
   }
 
+  const target: FigmaFileTarget = { fileKey };
+  const fileName = segments[at + 2];
+  if (fileName) target.fileName = decodeURIComponent(fileName).replace(/-/g, ' ');
+
   const raw = url.searchParams.get('node-id') ?? url.searchParams.get('node_id');
-  if (!raw) {
+  if (raw) {
+    // `new URL` has already decoded `%3A`; the hyphen form has not been touched.
+    const nodeId = raw.replace('-', ':');
+    if (!NODE_ID.test(nodeId)) return { ok: false, reason: `"${raw}" is not a Figma node id` };
+    target.nodeId = nodeId;
+  }
+
+  return { ok: true, target };
+}
+
+/** Reads one link. The reason, when there is one, says what to do about it. */
+export function readFigmaLink(input: string): FigmaLinkReading {
+  const reading = readFigmaFileLink(input);
+  if (!reading.ok) return reading;
+
+  const { fileKey, nodeId, fileName } = reading.target;
+  if (!nodeId) {
     return {
       ok: false,
       reason:
@@ -118,13 +158,8 @@ export function readFigmaLink(input: string): FigmaLinkReading {
     };
   }
 
-  // `new URL` has already decoded `%3A`; the hyphen form has not been touched.
-  const nodeId = raw.replace('-', ':');
-  if (!NODE_ID.test(nodeId)) return { ok: false, reason: `"${raw}" is not a Figma node id` };
-
   const reference: DesignReference = { fileKey, nodeId };
-  const fileName = segments[at + 2];
-  if (fileName) reference.fileName = decodeURIComponent(fileName).replace(/-/g, ' ');
+  if (fileName) reference.fileName = fileName;
   return { ok: true, reference };
 }
 

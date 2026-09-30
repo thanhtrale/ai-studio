@@ -44,6 +44,11 @@ export default defineNuxtConfig({
     supervisorUrl: `http://${supervisorHost}:${supervisorPort}`,
     supervisorToken: process.env['AISTUDIO_SUPERVISOR_TOKEN'] ?? '',
     storageDir,
+    // A Figma personal access token, used only to render frames. With it, a
+    // survey gets its pictures from Figma's own image endpoint thirty nodes at
+    // a time and does not need the desktop app to have the file open; without
+    // it, every render is a separate call to the local Dev Mode server.
+    figmaToken: process.env['AISTUDIO_FIGMA_TOKEN'] ?? process.env['FIGMA_TOKEN'] ?? '',
     // The LAN transfer listener: off until the LAN page turns it on, and the only
     // TCP socket this studio ever opens beyond loopback.
     lanPort: Number(process.env['AISTUDIO_LAN_PORT'] ?? 3001),

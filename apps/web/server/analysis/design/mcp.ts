@@ -138,17 +138,74 @@ export function textOfResult(result: McpToolResult): string {
     .trim();
 }
 
-/** The first image in a tool result, as bytes. */
+/**
+ * The first image in a tool result, as bytes.
+ *
+ * Two shapes carry bytes: an `image` item, which is what the protocol defines,
+ * and a `resource` item whose `blob` is the same base64 by another name. Both
+ * have been seen from Figma's own server, and which one arrives depends on the
+ * version of the desktop app rather than on anything this project controls.
+ */
 export function imageOfResult(result: McpToolResult): { bytes: Buffer; mimeType: string } | null {
   for (const item of result.content) {
-    if (item.type !== 'image') continue;
-    const data = Reflect.get(item, 'data');
-    const mimeType = Reflect.get(item, 'mimeType');
-    if (typeof data !== 'string') continue;
-    return {
-      bytes: Buffer.from(data, 'base64'),
-      mimeType: typeof mimeType === 'string' ? mimeType : 'image/png',
-    };
+    if (item.type === 'image') {
+      const data = Reflect.get(item, 'data');
+      const mimeType = Reflect.get(item, 'mimeType');
+      if (typeof data !== 'string') continue;
+      return {
+        bytes: Buffer.from(data, 'base64'),
+        mimeType: typeof mimeType === 'string' ? mimeType : 'image/png',
+      };
+    }
+
+    if (item.type === 'resource') {
+      const resource = Reflect.get(item, 'resource');
+      const blob = resource && typeof resource === 'object' ? Reflect.get(resource, 'blob') : undefined;
+      if (typeof blob !== 'string') continue;
+      const mimeType = Reflect.get(resource as object, 'mimeType');
+      return {
+        bytes: Buffer.from(blob, 'base64'),
+        mimeType: typeof mimeType === 'string' ? mimeType : 'image/png',
+      };
+    }
   }
   return null;
 }
+
+/** Anything that looks like a link to an image the server is serving itself. */
+const IMAGE_URL = /https?:\/\/[^\s"'<>)\]]+?(?:\.(?:png|jpe?g|webp|svg)|\/assets\/[\w./-]+)/i;
+
+/**
+ * The URL of an image a tool result points at rather than contains.
+ *
+ * Figma's local server increasingly answers `get_screenshot` with a link into
+ * its own asset server -- `http://127.0.0.1:3845/assets/…` -- instead of with
+ * the bytes. That is a perfectly good answer and it was being read as "no
+ * image": the reader only understood inline base64, so every render came back
+ * empty and every component was left as a name with no picture.
+ *
+ * Three spellings are accepted, because all three have been observed: a
+ * `resource_link`, a `resource` carrying a uri and no blob, and a plain text
+ * item with the URL in it.
+ */
+export function imageUrlOfResult(result: McpToolResult): string | null {
+  for (const item of result.content) {
+    if (item.type === 'resource_link') {
+      const uri = Reflect.get(item, 'uri');
+      if (typeof uri === 'string' && /^https?:/i.test(uri)) return uri;
+    }
+
+    if (item.type === 'resource') {
+      const resource = Reflect.get(item, 'resource');
+      const uri = resource && typeof resource === 'object' ? Reflect.get(resource, 'uri') : undefined;
+      if (typeof uri === 'string' && /^https?:/i.test(uri)) return uri;
+    }
+
+    if (item.type === 'text') {
+      const found = IMAGE_URL.exec(String(Reflect.get(item, 'text') ?? ''));
+      if (found) return found[0];
+    }
+  }
+  return null;
+}
+

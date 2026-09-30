@@ -66,6 +66,18 @@ const FUNCTIONS: StudioFunction[] = [
     to: '/analyze/block',
     glyph: '◇',
   },
+  {
+    key: 'survey',
+    title: 'Figma survey',
+    blurb:
+      'A whole Figma file, indexed. Every screen with the viewports it was drawn at, every component ' +
+      'under the name the designer gave it, each one pointing back at its node — and a local model ' +
+      'grouping them into modules.',
+    modality: 'text',
+    capability: 'text.generate',
+    to: '/analyze/figma',
+    glyph: '▤',
+  },
 ];
 
 function status(entry: StudioFunction): { tone: 'ok' | 'warn' | 'neutral'; label: string } {

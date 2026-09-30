@@ -15,16 +15,19 @@ const MAX_SAMPLES = 900;
 /**
  * Where a timeline is asked for.
  *
- * Two producers report the same `JobProgress`: the supervisor, for a
- * generation, and this application's own analysis registry. The shape being
- * identical is deliberate -- it is what lets one composable and one timeline
- * component drive both -- but the route is not identical, and a caller that
- * does not say which gets a supervisor that has never heard of its id.
+ * Three producers report the same `JobProgress`: the supervisor, for a
+ * generation, and this application's own analysis and survey registries. The
+ * shape being identical is deliberate -- it is what lets one composable and one
+ * timeline component drive all of them -- but the route is not identical, and a
+ * caller that does not say which gets a supervisor that has never heard of its
+ * id.
  */
 const TELEMETRY_ROUTES = {
   job: '/api/jobs',
   analysis: '/api/analyze',
+  survey: '/api/survey',
 } as const;
+
 
 export type TelemetrySource = keyof typeof TELEMETRY_ROUTES;
 
