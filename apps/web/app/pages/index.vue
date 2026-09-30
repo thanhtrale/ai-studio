@@ -48,7 +48,7 @@ const FUNCTIONS: StudioFunction[] = [
     key: 'image',
     title: 'Image generation',
     blurb:
-      'Qwen-Image-Edit on stable-diffusion.cpp. Text-to-image, or up to four reference images composed into one edit, with a batch that writes every attempt to the library separately.',
+      'Qwen-Image-Edit 2511 on ComfyUI. Text-to-image, or up to three reference images composed into one edit, with a batch that writes every attempt to the library separately.',
     modality: 'image',
     capability: 'image.generate',
     to: '/generate/image',

@@ -1,5 +1,6 @@
 import type { ImageGenerateRequest, ImageGenerateResponse } from '#shared/generate';
-import { generatedMediaId } from '#shared/library';
+import { mergePrompt } from '#shared/generate';
+import { generatedMediaId, sanitiseCollection } from '#shared/library';
 
 import { armImagePath, mediaIdFromPath } from '../../../utils/jobs';
 import { describeMedia, writeMeta } from '../../../utils/library';
@@ -7,13 +8,19 @@ import { relay } from '../../../utils/relay';
 import { RelayError } from '../../../utils/supervisor';
 
 /**
- * The child's own ceiling: `limits.max_batch_count` from its capabilities.
+ * The arm's own ceilings, checked here as well as in the arm so a bad request
+ * is refused before an arm is brokered onto the card for it.
  *
- * Checked here as well as in the arm so a bad request is refused before an arm
- * is brokered onto the card for it.
+ * Three references rather than four: ComfyUI's Qwen edit encoder takes image1
+ * through image3 and has nowhere to put a fourth.
+ *
+ * The batch ceiling is about time, not memory. One image is one ComfyUI
+ * prompt, so a batch costs no extra VRAM -- but this request stays open until
+ * the last one is written, so the number is what keeps a mistyped batch from
+ * holding the card for an afternoon.
  */
-const MAX_BATCH = 8;
-const MAX_REFERENCES = 4;
+const MAX_BATCH = 100;
+const MAX_REFERENCES = 3;
 
 export default defineEventHandler(async (event): Promise<ImageGenerateResponse> => {
   const armId = getRouterParam(event, 'id');
@@ -23,7 +30,11 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
   const body = await readBody<ImageGenerateRequest>(event);
 
   const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
-  if (!prompt) {
+  const stylePrompt = typeof body?.stylePrompt === 'string' ? body.stylePrompt.trim() : '';
+  // The console's two boxes are one prompt to the model. Merged here rather
+  // than in the browser so the record keeps the halves and the whole.
+  const promptForArm = mergePrompt(prompt, stylePrompt);
+  if (!promptForArm) {
     throw createError({
       statusCode: 400,
       statusMessage: 'invalid_request',
@@ -63,7 +74,8 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
   // The first image of a batch keeps this name and the rest are suffixed by the
   // arm. Where a generation is filed stays one rule in one place, and it is the
   // same rule as the video console's.
-  const plannedId = generatedMediaId(jobId, startedAt, '.png');
+  const collection = sanitiseCollection(body.collection) ?? undefined;
+  const plannedId = generatedMediaId(jobId, startedAt, '.png', collection);
 
   return relay(async () => {
     const refImages = referenceIds.map((id) => armImagePath(id));
@@ -84,7 +96,7 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
       jobId,
       params: body.armParams ?? {},
       job: {
-        prompt,
+        prompt: promptForArm,
         outPath: plannedId.slice('outputs/'.length),
         width: settings.width,
         height: settings.height,
@@ -95,6 +107,7 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
         flowShift: settings.flowShift,
         seed: settings.seed,
         batch,
+        ...(body.enhancePrompt ? { enhancePrompt: true } : {}),
         ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
         ...(refImages.length > 0 ? { refImages } : {}),
       },
@@ -103,6 +116,8 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
     if (!Array.isArray(report.images) || report.images.length === 0) {
       throw new RelayError('arm_error', 'the arm reported no images');
     }
+
+    const promptSeen = report.prompt_used || promptForArm;
 
     const media = [];
     for (const image of report.images) {
@@ -120,10 +135,14 @@ export default defineEventHandler(async (event): Promise<ImageGenerateResponse> 
         jobId,
         armId,
         prompt,
+        ...(stylePrompt ? { stylePrompt } : {}),
         ...(body.armParams && Object.keys(body.armParams).length > 0
           ? { armParams: body.armParams }
           : {}),
-        ...(report.prompt_used && report.prompt_used !== prompt ? { promptUsed: report.prompt_used } : {}),
+        // What reached the model: the enhancer's rewrite if there was one,
+        // otherwise the two boxes joined. Recorded only when it differs from
+        // what was typed, so a single-box run keeps one prompt and not two.
+        ...(promptSeen !== prompt ? { promptUsed: promptSeen } : {}),
         ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
         // The first reference is the one the detail panel shows; the whole set
         // is kept beside it so the run can be repeated exactly.

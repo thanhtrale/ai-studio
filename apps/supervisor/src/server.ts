@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import {
   jobRequestSchema,
+  patientFetchInit,
   startArmRequestSchema,
   type ControlErrorBody,
   type ControlErrorCode,
@@ -219,6 +220,9 @@ async function handle(
       let armResponse: Response;
       try {
         armResponse = await fetch(`${manager.endpoint(armId)}/generate`, {
+          // The arm answers when the job is finished, not when it is accepted,
+          // so this call outlasts Node's own five-minute response ceiling.
+          ...patientFetchInit(),
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...job, jobId }),

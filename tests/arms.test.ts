@@ -21,7 +21,8 @@ describe('scaffolded arm packages', () => {
     expect(armDirectories).toEqual(
       expect.arrayContaining([
         'text-llamacpp-cu124',
-        'image-qwen-edit-sdcpp',
+        'image-qwen-edit-comfy',
+        'image-qwen21-turbo-comfy',
         'video-ltx25-diffusers',
       ]),
     );
@@ -78,7 +79,8 @@ describe('scaffolded arm packages', () => {
   // are is a fact about this repository, so it is pinned here. The text arm
   // declares nothing because nothing has been built to drive it.
   it.each([
-    ['image-qwen-edit-sdcpp', ['image.generate']],
+    ['image-qwen-edit-comfy', ['image.generate']],
+    ['image-qwen21-turbo-comfy', ['image.generate']],
     ['video-ltx25-diffusers', ['video.generate']],
     ['text-llamacpp-cu124', []],
   ])('%s declares the job contracts it can actually serve', (name, expected) => {

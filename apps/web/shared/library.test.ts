@@ -5,13 +5,17 @@ import {
   featureOf,
   filterMedia,
   formatBytes,
+  formatSeconds,
   generatedMediaId,
   groupLabel,
   groupMedia,
   groupOf,
   isMediaId,
   mediaKind,
+  mediaSeconds,
+  mediaTags,
   recordId,
+  sanitiseCollection,
   sanitiseUploadName,
   shortDescription,
   sourceLabel,
@@ -127,6 +131,126 @@ describe('generatedMediaId', () => {
   it('produces an id the library will accept', () => {
     expect(isMediaId(generatedMediaId('abcd1234-ef56', new Date(2026, 0, 2, 3, 4, 5)))).toBe(true);
   });
+
+  it('files into a named collection instead of the date when given one', () => {
+    const at = new Date(2026, 8, 11, 14, 30, 22);
+    expect(generatedMediaId('refall-0001', at, '.png', 'ref-crawl')).toBe(
+      'outputs/ref-crawl/143022-refall-0.png',
+    );
+  });
+});
+
+describe('sanitiseCollection', () => {
+  it('folds a name down to one safe segment', () => {
+    expect(sanitiseCollection('Ref Crawl 2026')).toBe('ref-crawl-2026');
+    expect(sanitiseCollection('  spaced  ')).toBe('spaced');
+  });
+
+  it('refuses to let a collection become a path or a device', () => {
+    expect(sanitiseCollection('../../etc')).toBe('etc');
+    expect(sanitiseCollection('a/b')).toBe('a-b');
+    expect(sanitiseCollection('..')).toBeNull();
+    expect(sanitiseCollection('nul')).toBeNull();
+    expect(sanitiseCollection('   ')).toBeNull();
+    expect(sanitiseCollection(42)).toBeNull();
+  });
+
+  it('yields ids the library will accept', () => {
+    const name = sanitiseCollection('Ref Crawl / 30 Sep');
+    expect(isMediaId(generatedMediaId('refall-0001', new Date(), '.png', name ?? undefined))).toBe(
+      true,
+    );
+  });
+});
+
+describe('mediaTags', () => {
+  const generated = (armId: string, over: Record<string, unknown> = {}) =>
+    item('outputs/a/x.png', {
+      meta: {
+        source: 'generated',
+        createdAt: '2026-09-30T10:00:00.000Z',
+        armId,
+        settings: { kind: 'image', width: 1024, height: 1024, seed: 1, steps: 6, batch: 1, batchIndex: 0 } as ImageJobSettings,
+        ...over,
+      },
+    });
+
+  it('names the backend and the model apart, so two runs compare', () => {
+    expect(mediaTags(generated('image-qwen21-turbo-comfy'))).toEqual([
+      'comfy',
+      'qwen2.1',
+      'turbo',
+      't2i',
+    ]);
+    expect(mediaTags(generated('image-qwen-edit-comfy'))).toEqual(['comfy', 'qwen2511', 't2i']);
+  });
+
+  it('says whether the run was conditioned on an image', () => {
+    expect(mediaTags(generated('image-qwen-edit-comfy', { referenceId: 'inputs/a.png' }))).toContain(
+      'i2i',
+    );
+    expect(
+      mediaTags(generated('image-qwen-edit-comfy', { referenceIds: ['inputs/a.png'] })),
+    ).toContain('i2i');
+  });
+
+  it('reads video the same way', () => {
+    const clip = item('outputs/a/x.mp4', {
+      meta: {
+        source: 'generated',
+        createdAt: '2026-09-30T10:00:00.000Z',
+        armId: 'video-ltx25-diffusers',
+        referenceId: 'inputs/a.png',
+      },
+    });
+    expect(mediaTags(clip)).toEqual(['diffusers', 'ltx2.5', 'i2v']);
+  });
+
+  it('falls back to the arm id for an arm it has no words for', () => {
+    expect(mediaTags(generated('image-something-new'))).toEqual(['something-new', 't2i']);
+  });
+
+  it('has nothing to say about a file no arm made', () => {
+    expect(mediaTags(item('inputs/photo.png'))).toEqual([]);
+    expect(
+      mediaTags(
+        item('inputs/photo.png', {
+          meta: { source: 'uploaded', createdAt: '2026-09-30T10:00:00.000Z' },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('mediaSeconds', () => {
+  const timed = (secondsTotal: number, count: number) =>
+    item('outputs/a/x.png', {
+      meta: {
+        source: 'generated',
+        createdAt: '2026-09-30T10:00:00.000Z',
+        armId: 'image-qwen21-turbo-comfy',
+        output: { width: 1024, height: 1024, count },
+        report: { secondsTotal, steps: 6, peakVramGib: 14.5, stages: [] },
+      },
+    });
+
+  it('divides a job-wide total by the files it produced', () => {
+    expect(mediaSeconds(timed(11.9, 1))).toBeCloseTo(11.9);
+    expect(mediaSeconds(timed(735.4, 100))).toBeCloseTo(7.354);
+  });
+
+  it('is null where nothing timed the file', () => {
+    expect(mediaSeconds(item('inputs/photo.png'))).toBeNull();
+    expect(mediaSeconds(timed(0, 1))).toBeNull();
+  });
+});
+
+describe('formatSeconds', () => {
+  it('stays short enough for a chip', () => {
+    expect(formatSeconds(11.94)).toBe('11.9s');
+    expect(formatSeconds(59.9)).toBe('59.9s');
+    expect(formatSeconds(735.4)).toBe('12m 15s');
+  });
 });
 
 describe('sanitiseUploadName', () => {
@@ -210,6 +334,23 @@ describe('shortDescription', () => {
 
   it('marks a file the studio has no record of', () => {
     expect(shortDescription(item('outputs/bench/x.mp4', { bytes: 2048 }))).toBe('2.0 KB · untracked');
+  });
+
+  it('drops the arm where something else already names it', () => {
+    const described = shortDescription(
+      item('outputs/a/x.png', {
+        bytes: 1_048_576,
+        meta: {
+          source: 'generated',
+          createdAt: '2026-09-30T10:00:00.000Z',
+          armId: 'image-qwen21-turbo-comfy',
+          output: { width: 1024, height: 1024, count: 1 },
+        },
+      }),
+      { arm: false },
+    );
+
+    expect(described).toBe('1024×1024 · 1.0 MB');
   });
 });
 

@@ -16,9 +16,12 @@ import {
   featureOf,
   filterMedia,
   formatBytes,
+  formatSeconds,
   groupLabel,
   groupMedia,
   isImageSettings,
+  mediaSeconds,
+  mediaTags,
   shortDescription,
   sourceLabel,
   sourceOf,
@@ -117,6 +120,38 @@ const cards = computed<MediaEntry[]>(() =>
 );
 
 const visible = computed<MediaItem[]>(() => entryItems(cards.value));
+
+interface Chip {
+  text: string;
+  title: string;
+  /** Set on the one chip that is a duration, which is coloured apart from the rest. */
+  timing?: true;
+}
+
+/**
+ * The chips on one card: how long it took, then what made it.
+ *
+ * Timing leads because comparing two runs is the reason chips are here at all,
+ * and a number only scans down a column when it is in the same place on every
+ * card -- which the tags, varying in number, cannot promise.
+ */
+function chipsOf(entry: MediaEntry): Chip[] {
+  const item = entry.kind === 'stack' ? entry.cover : entry.item;
+  const chips: Chip[] = [];
+
+  const seconds = mediaSeconds(item);
+  if (seconds !== null) {
+    const count = item.meta?.output?.count ?? 1;
+    chips.push({
+      text: formatSeconds(seconds),
+      title: count > 1 ? `average per image over a batch of ${count}` : 'time to generate',
+      timing: true,
+    });
+  }
+
+  for (const text of mediaTags(item)) chips.push({ text, title: item.meta?.armId ?? text });
+  return chips;
+}
 
 /** What the job asked for, which is not always how many files survive. */
 const packAsked = computed(() => {
@@ -380,13 +415,33 @@ const packCount = computed(() => entries.value.filter((entry) => entry.kind === 
             >
               {{ position + 1 }}
             </span>
-            <div class="space-y-0.5 p-2">
+            <div class="space-y-1 p-2">
               <p class="truncate text-xs font-medium text-slate-200">
                 {{ entry.kind === 'stack' ? `Batch of ${entry.items.length}` : entry.item.name }}
               </p>
               <p class="truncate text-[11px] text-slate-500">
-                {{ shortDescription(entry.kind === 'stack' ? entry.cover : entry.item) }}
+                {{
+                  shortDescription(entry.kind === 'stack' ? entry.cover : entry.item, {
+                    arm: chipsOf(entry).length === 0,
+                  })
+                }}
               </p>
+              <!-- A stack is one job, so its cover's chips describe all of it. -->
+              <div v-if="chipsOf(entry).length > 0" class="flex flex-wrap gap-1 pt-0.5">
+                <span
+                  v-for="chip in chipsOf(entry)"
+                  :key="chip.text"
+                  :title="chip.title"
+                  class="rounded px-1.5 py-0.5 text-[10px] leading-none"
+                  :class="
+                    chip.timing
+                      ? 'bg-sky-500/15 font-medium text-sky-300'
+                      : 'bg-white/5 text-slate-400'
+                  "
+                >
+                  {{ chip.text }}
+                </span>
+              </div>
             </div>
           </button>
         </li>

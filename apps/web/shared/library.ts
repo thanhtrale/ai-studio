@@ -65,6 +65,14 @@ export interface MediaMeta {
   armId?: string;
   /** What the user typed. */
   prompt?: string;
+  /**
+   * The style half of the prompt, when the console's two boxes were used.
+   *
+   * Kept apart from `prompt` only so the form can be refilled the way it was
+   * written. What reached the model is the two of them joined, which is
+   * `promptUsed`.
+   */
+  stylePrompt?: string;
   /** What actually reached the model, which differs when the enhancer ran. */
   promptUsed?: string;
   negativePrompt?: string;
@@ -275,9 +283,41 @@ function clockPrefix(at: Date): string {
  * The date directory is a real directory rather than a field in a record, so the
  * sidebar's folders and the filesystem's folders are the same thing -- and a
  * folder the studio made is indistinguishable from one a script made.
+ *
+ * A named `collection` stands in for the date when a run is one batch of work
+ * that wants to be looked at together, which a date folder cannot express once
+ * the same day holds two of them.
  */
-export function generatedMediaId(jobId: string, at: Date, extension = '.mp4'): string {
-  return `outputs/${dateDirectory(at)}/${clockPrefix(at)}-${jobId.slice(0, 8)}${extension}`;
+export function generatedMediaId(
+  jobId: string,
+  at: Date,
+  extension = '.mp4',
+  collection?: string,
+): string {
+  const folder = collection ?? dateDirectory(at);
+  return `outputs/${folder}/${clockPrefix(at)}-${jobId.slice(0, 8)}${extension}`;
+}
+
+/**
+ * A collection name safe to make a directory of, or `null`.
+ *
+ * One segment, never a path: this is request input that becomes a folder, so
+ * separators and dots are folded away rather than rejected, and the result is
+ * held to the same character class `isMediaId` will later accept.
+ */
+export function sanitiseCollection(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const name = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[-._]+|[-._]+$/g, '')
+    .slice(0, 64)
+    .replace(/[-._]+$/, '');
+
+  if (name === '' || isDeviceName(name)) return null;
+  return name;
 }
 
 /**
@@ -320,8 +360,13 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
-/** The one line under a thumbnail. Dimensions first: it is what the eye checks. */
-export function shortDescription(item: MediaItem): string {
+/**
+ * The one line under a thumbnail. Dimensions first: it is what the eye checks.
+ *
+ * `arm` is off where chips already name it, because the arm id is the longest
+ * token here and repeating it only truncates the size out of view.
+ */
+export function shortDescription(item: MediaItem, { arm = true } = {}): string {
   const parts: string[] = [];
   const output = item.meta?.output;
 
@@ -333,10 +378,71 @@ export function shortDescription(item: MediaItem): string {
   }
 
   parts.push(formatBytes(item.bytes));
-  if (item.meta?.armId) parts.push(item.meta.armId.replace(/^(video|image|text|audio)-/, ''));
+  if (arm && item.meta?.armId) parts.push(item.meta.armId.replace(/^(video|image|text|audio)-/, ''));
   else if (!item.meta) parts.push('untracked');
 
   return parts.join(' · ');
+}
+
+/**
+ * What to call each arm in one or two words, for a chip rather than a sentence.
+ *
+ * An arm id names a directory and reads like one. Comparing two runs at a
+ * glance needs the backend and the model as separate words, which the id runs
+ * together and abbreviates differently each time.
+ */
+const ARM_TAGS: Record<string, readonly string[]> = {
+  'image-qwen-edit-comfy': ['comfy', 'qwen2511'],
+  'image-qwen21-turbo-comfy': ['comfy', 'qwen2.1', 'turbo'],
+  'video-ltx25-diffusers': ['diffusers', 'ltx2.5'],
+};
+
+/**
+ * The chips under a thumbnail: how a file was made, in comparable words.
+ *
+ * Derived from the record rather than stored in it, so the vocabulary can be
+ * changed without rewriting every sidecar -- and so a file made before these
+ * existed gets them anyway.
+ */
+export function mediaTags(item: MediaItem): string[] {
+  const meta = item.meta;
+  if (!meta || meta.source !== 'generated') return [];
+
+  const armId = meta.armId;
+  const arm = armId
+    ? (ARM_TAGS[armId] ?? [armId.replace(/^(video|image|text|audio)-/, '')])
+    : [];
+
+  const feature = featureOf(item);
+  if (feature === null) return [...arm];
+
+  const modality = feature === 'image.generate' ? 'i' : 'v';
+  const conditioned = (meta.referenceIds?.length ?? 0) > 0 || meta.referenceId !== undefined;
+  return [...arm, `${conditioned ? 'i' : 't'}2${modality}`];
+}
+
+/**
+ * How long this file took to make, or `null` where nothing timed it.
+ *
+ * A batch is one job with one report, so the per-image figure is an average.
+ * That is the number worth comparing anyway: the alternative is a total that
+ * says a batch of a hundred is slower than a batch of one.
+ */
+export function mediaSeconds(item: MediaItem): number | null {
+  const report = item.meta?.report;
+  if (!report || !Number.isFinite(report.secondsTotal) || report.secondsTotal <= 0) return null;
+
+  const settings = item.meta?.settings;
+  const batch = settings && isImageSettings(settings) ? settings.batch : undefined;
+  const count = item.meta?.output?.count ?? batch ?? 1;
+  return report.secondsTotal / Math.max(count, 1);
+}
+
+/** Short enough for a chip: seconds under a minute, minutes and seconds above it. */
+export function formatSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds - minutes * 60)}s`;
 }
 
 /** Newest first, by the record's own timestamp where there is one. */

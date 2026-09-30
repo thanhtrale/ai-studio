@@ -1,0 +1,68 @@
+id: image-qwen21-turbo-comfy
+name: Qwen-Image 2.1 + viggle-turbo (ComfyUI)
+modality: image
+protocol: native
+lifecycle: resident
+capabilities:
+  - image.generate
+resources:
+  gpu: exclusive
+  # The transformer cast to fp8, the Qwen3-VL text encoder, the VAE and the
+  # activation peak at one megapixel. ComfyUI streams what will not fit, so
+  # this is what it wants rather than a hard floor.
+  vramEstimateMb: 15500
+launch:
+  cwd: .
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen21"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--text-encoder"
+    - "{{textEncoder}}"
+    - "--vae"
+    - "{{vae}}"
+    - "--turbo-lora"
+    - "{{turboLora}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+    - "--weight-dtype"
+    - "{{weightDtype}}"
+    - "--text-encoder-device"
+    - "{{textEncoderDevice}}"
+    - "--vram-mode"
+    - "{{vramMode}}"
+    - "--attention"
+    - "{{attention}}"
+    - "--reserve-vram"
+    - "{{reserveVram}}"
+    - "--cache-mode"
+    - "{{cacheMode}}"
+    - "--kv-cache-device"
+    - "{{kvCacheDevice}}"
+    - "--kv-cache-dtype"
+    - "{{kvCacheDtype}}"
+    - "--extra-args"
+    - "{{extraArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  # Answers as soon as this arm is listening. ComfyUI itself is started by the
+  # first job, because importing torch and scanning nodes outlasts any sensible
+  # health timeout.
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json
