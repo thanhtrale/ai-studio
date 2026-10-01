@@ -1,4 +1,5 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
 // Client-only: the Firebase Web SDK talks to Storage from the browser, and the
@@ -17,6 +18,7 @@ export default defineNuxtPlugin(() => {
     provide: {
       firebaseApp: app,
       firebaseStorage: getStorage(app),
+      firestore: getFirestore(app),
     },
   };
 });

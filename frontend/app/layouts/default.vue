@@ -28,6 +28,7 @@
 <script setup lang="ts">
 const links = [
   { to: '/files', label: 'Thư viện' },
+  { to: '/p2p', label: 'P2P' },
   { to: '/about', label: 'Giới thiệu' },
 ];
 </script>

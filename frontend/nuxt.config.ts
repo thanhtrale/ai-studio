@@ -54,7 +54,14 @@ export default defineNuxtConfig({
         messagingSenderId: process.env['NUXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID'] ?? '',
         appId: process.env['NUXT_PUBLIC_FIREBASE_APP_ID'] ?? '',
       },
-      storagePrefix: process.env['NUXT_PUBLIC_STORAGE_PREFIX'] ?? 'uploads',
+      storagePrefix: process.env['NUXT_PUBLIC_STORAGE_PREFIX'] ?? 'ai-studio/uploads',
+      // Optional TURN relay. STUN alone cannot get through symmetric NAT, which
+      // is the common case when the two peers are on different networks.
+      turn: {
+        urls: process.env['NUXT_PUBLIC_TURN_URLS'] ?? '',
+        username: process.env['NUXT_PUBLIC_TURN_USERNAME'] ?? '',
+        credential: process.env['NUXT_PUBLIC_TURN_CREDENTIAL'] ?? '',
+      },
     },
   },
 });

@@ -37,16 +37,52 @@ npm run deploy            # generate + deploy lên ai-studio-client
 npm run deploy:preview    # deploy lên preview channel, URL tạm
 ```
 
-### Storage rules — KHÔNG deploy tự động
+### Storage / Firestore rules — KHÔNG deploy tự động
 
-`storage.rules` cố ý **không** được khai trong `firebase.json`. Rules là phạm vi
-**bucket, dùng chung cả project** — đẩy lên sẽ ghi đè rules của app khác đang dùng
-`forward-camera-345608`. Muốn áp thì xem kỹ rules hiện có trên Console trước, rồi
-chạy thủ công:
+`storage.rules` và `firestore.rules` cố ý **không** được khai trong `firebase.json`.
+Rules có phạm vi **toàn bucket / toàn database, dùng chung cả project** — đẩy lên sẽ
+ghi đè rules của app khác đang dùng `forward-camera-345608`. Cách an toàn: mở Console,
+chèn khối cần thiết vào rules đang chạy.
 
-```bash
-npx firebase-tools deploy --only storage --project forward-camera-345608
-```
+## POC truyền tệp P2P (`/p2p`)
+
+WebRTC data channel, Firestore chỉ làm signaling (offer / answer / ICE candidate);
+tệp đi thẳng giữa 2 trình duyệt, không qua server.
+
+Cách test:
+
+1. Bật Firestore trong project và chèn khối `ai-studio` từ `firestore.rules` vào
+   rules đang chạy. Không có bước này thì mọi thao tác bị từ chối.
+2. Mở `/p2p` trên máy A → **Tạo phòng** → được mã 6 ký tự.
+3. Mở `/p2p` trên máy B → nhập mã → **Kết nối**.
+4. Khi trạng thái là "Đã kết nối" thì chọn tệp để gửi. Gửi được cả 2 chiều.
+
+Hai đầu **không cần cùng origin**: một máy mở `https://ai-studio-client.web.app`,
+máy kia mở `http://localhost:3100` vẫn bắt tay được, vì cả hai cùng nói chuyện với
+một document Firestore và WebRTC không quan tâm same-origin.
+
+### Không chiếm RAM
+
+Bên nhận ghi thẳng vào Origin Private File System (`navigator.storage.getDirectory()`)
+theo từng chunk, không gom `Blob` trong bộ nhớ; link tải xuống lấy từ file trên đĩa.
+Trình duyệt không hỗ trợ OPFS thì tự rơi về chế độ giữ trong RAM, UI có ghi rõ đang
+ở chế độ nào.
+
+Bên gửi đọc file theo lát 16 KiB nên cũng không nạp toàn bộ. Hai van điều tiết:
+
+- `bufferedAmount` của data channel — chặn hàng đợi gửi phình to.
+- Cửa sổ ACK 8 MB — bên nhận báo số byte **đã ghi xong xuống đĩa**, bên gửi không
+  chạy trước quá cửa sổ đó. Thiếu cái này thì mạng nhanh hơn đĩa sẽ dồn chunk vào
+  RAM bên nhận. Đây chính là thứ torrent/rsync làm: credit window + ghi theo offset.
+
+Ràng buộc:
+
+- **Phải chạy qua HTTPS** hoặc `localhost` / `127.0.0.1`. Mở bằng IP LAN dạng
+  `http://192.168.x.x` thì trình duyệt chặn WebRTC.
+- **STUN mặc định, TURN tuỳ chọn.** Khác mạng mà gặp symmetric NAT thì sẽ thấy
+  `connection: failed`. Lúc đó điền `NUXT_PUBLIC_TURN_*` trỏ tới một TURN server.
+- Candidate subcollection không được dọn khi ngắt (client không xoá được cả
+  collection trong một lệnh). Rác tích trong Firestore, cần TTL policy nếu dùng lâu.
 
 ## Lưu ý
 

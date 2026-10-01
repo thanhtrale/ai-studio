@@ -7,9 +7,10 @@ service firebase.storage {
       allow read, write: if false;
     }
 
-    // Open the upload folder only to signed-in users, and cap object size so a
-    // single client cannot run up the bill.
-    match /uploads/{fileName} {
+    // Open only this app's own subtree, and cap object size so a single client
+    // cannot run up the bill. Everything outside ai-studio/ belongs to other apps
+    // sharing this bucket and is left untouched by the deny above.
+    match /ai-studio/uploads/{fileName} {
       allow read: if request.auth != null;
       allow write: if request.auth != null
         && request.resource.size < 200 * 1024 * 1024;

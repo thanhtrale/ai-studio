@@ -1,0 +1,21 @@
+// THAM KHẢO — KHÔNG deploy file này đè lên project.
+//
+// Firestore rules áp cho toàn database, dùng chung với các app khác trong
+// `forward-camera-345608`. Đẩy nguyên file này lên sẽ xoá sạch rules hiện có.
+// Cách dùng: mở Firebase Console → Firestore → Rules, rồi CHÈN khối
+// `match /ai-studio/...` bên dưới vào rules đang chạy.
+//
+// Toàn bộ dữ liệu của app nằm dưới collection `ai-studio`, nên một khối match là
+// đủ để scope. Đây là rules mở cho POC: ai biết mã phòng cũng đọc/ghi được, mà mã
+// phòng chỉ có 6 ký tự. Đủ để test, không dùng cho production.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /ai-studio/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
