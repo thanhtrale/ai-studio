@@ -10,6 +10,10 @@ node_modules/
 dist/
 .data/
 
+# Firebase CLI
+.firebase/
+firebase-debug.log
+
 # Env & secrets
 .env
 .env.*

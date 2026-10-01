@@ -1,0 +1,31 @@
+{
+  "name": "@ai-studio/frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "nuxt prepare",
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "npx serve .output/public",
+    "typecheck": "nuxt prepare && vue-tsc --build",
+    "deploy": "nuxt generate && npx --yes firebase-tools deploy --project forward-camera-345608 --only hosting:ai-studio-client",
+    "deploy:preview": "nuxt generate && npx --yes firebase-tools hosting:channel:deploy preview --project forward-camera-345608 --only ai-studio-client"
+  },
+  "dependencies": {
+    "firebase": "^12.4.0",
+    "nuxt": "^4.5.2",
+    "vue": "^3.5.42"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.0",
+    "vue-tsc": "^3.3.11"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@firebase/util@1.15.3": true
+  }
+}
