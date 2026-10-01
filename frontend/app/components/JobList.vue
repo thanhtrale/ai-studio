@@ -13,10 +13,11 @@
             {{ STATUS_LABEL[job.status] }}
           </span>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-sm">{{ job.prompt || '(không có prompt)' }}</p>
+            <p class="truncate text-sm">{{ jobTitle(job) }}</p>
             <p class="text-xs text-ink-500">
-              {{ job.settings.width }}×{{ job.settings.height }} · {{ job.settings.seconds }}s ·
-              {{ job.settings.frameRate }}fps · {{ formatDate(new Date(job.createdAt).toISOString()) }}
+              {{ jobTypeById(job.typeId)?.label ?? job.typeId }} ·
+              {{ summarise(job) }} ·
+              {{ formatDate(new Date(job.createdAt).toISOString()) }}
             </p>
           </div>
 
@@ -60,7 +61,13 @@
 </template>
 
 <script setup lang="ts">
-import { ACTIVE_JOB_STATUSES, type CloudJobDoc, type CloudJobStatus } from '@ai-studio/cloud-contract';
+import {
+  ACTIVE_JOB_STATUSES,
+  jobTitle,
+  jobTypeById,
+  type CloudJobDoc,
+  type CloudJobStatus,
+} from '@ai-studio/cloud-contract';
 import { formatDate } from '~/utils/format';
 
 defineProps<{
@@ -69,6 +76,16 @@ defineProps<{
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
 }>();
+
+/** The two or three numbers worth showing without knowing which arm ran. */
+function summarise(job: CloudJobDoc): string {
+  const parts: string[] = [];
+  const { width, height, numFrames, batch } = job.values as Record<string, number | undefined>;
+  if (width && height) parts.push(`${width}×${height}`);
+  if (numFrames) parts.push(`${numFrames} khung`);
+  if (batch && batch > 1) parts.push(`×${batch}`);
+  return parts.join(' · ') || '—';
+}
 
 const STATUS_LABEL: Record<CloudJobStatus, string> = {
   queued: 'Chờ',

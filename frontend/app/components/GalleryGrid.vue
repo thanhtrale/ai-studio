@@ -10,17 +10,19 @@
     <div v-else class="grid gap-5 sm:grid-cols-2">
       <article v-for="item in items" :key="item.id" class="space-y-3 rounded-xl border border-white/10 bg-white/5 p-4">
         <video
+          v-if="item.modality === 'video'"
           :src="item.media.downloadUrl"
           controls
           preload="metadata"
           class="w-full rounded-lg bg-black"
         />
+        <img v-else :src="item.media.downloadUrl" :alt="title(item)" class="w-full rounded-lg bg-black" />
 
         <div class="space-y-1">
-          <p class="text-sm">{{ item.prompt }}</p>
+          <p class="text-sm">{{ title(item) }}</p>
           <p class="text-xs text-ink-500">
-            {{ item.settings.width }}×{{ item.settings.height }} ·
-            {{ item.settings.seconds }}s ·
+            {{ jobTypeById(item.typeId)?.label ?? item.typeId }} ·
+            {{ item.media.width ?? '?' }}×{{ item.media.height ?? '?' }} ·
             {{ formatBytes(item.media.bytes) }} ·
             {{ Math.round(item.seconds) }}s render ·
             {{ formatDate(new Date(item.createdAt).toISOString()) }}
@@ -63,7 +65,13 @@
 </template>
 
 <script setup lang="ts">
+import { jobTypeById, type CloudGalleryDoc } from '@ai-studio/cloud-contract';
 import { formatBytes, formatDate } from '~/utils/format';
 
 const { items, pending, error, remove } = useCloudGallery();
+
+function title(item: CloudGalleryDoc): string {
+  const prompt = item.values['prompt'];
+  return typeof prompt === 'string' && prompt.trim() ? prompt : '(không có prompt)';
+}
 </script>

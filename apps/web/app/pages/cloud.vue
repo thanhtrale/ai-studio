@@ -39,9 +39,9 @@
         <li v-for="job in data.jobs" :key="job.id" class="flex items-start gap-3 px-4 py-3">
           <span class="mt-0.5 shrink-0 rounded-full border px-2 py-0.5 text-xs">{{ job.status }}</span>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-sm">{{ job.prompt }}</p>
+            <p class="truncate text-sm">{{ jobTitle(job) }}</p>
             <p class="text-xs opacity-50">
-              {{ job.settings.width }}×{{ job.settings.height }} · {{ job.settings.seconds }}s ·
+              {{ job.typeId }} · {{ job.armId }} ·
               {{ job.createdBy.email ?? job.createdBy.uid }}
               <template v-if="job.progress"> · {{ job.progress.label }}</template>
             </p>
@@ -58,6 +58,8 @@
 </template>
 
 <script setup lang="ts">
+import { jobTitle } from '@ai-studio/cloud-contract';
+
 useHead({ title: 'Cloud worker' });
 
 const busy = ref(false);

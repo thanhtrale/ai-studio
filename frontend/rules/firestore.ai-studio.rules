@@ -20,7 +20,7 @@
         && request.resource.data.createdBy.uid == request.auth.uid
         && request.resource.data.status == 'queued'
         && request.resource.data.claimedBy == null
-        && request.resource.data.result == null;
+        && request.resource.data.results.size() == 0;
 
       allow update: if request.auth != null
         && resource.data.createdBy.uid == request.auth.uid

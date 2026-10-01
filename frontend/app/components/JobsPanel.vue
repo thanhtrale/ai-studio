@@ -10,11 +10,11 @@
       <span v-if="error" class="text-sm text-red-300">{{ error }}</span>
     </div>
 
-    <JobCreateForm :worker-online="workerOnline" :submit="submit" />
+    <JobCreateForm :worker-online="workerOnline" :worker-arms="workerArms" :submit="submit" />
     <JobList :jobs="jobs" :pending="pending" :cancel="cancel" :remove="remove" />
   </div>
 </template>
 
 <script setup lang="ts">
-const { jobs, workerOnline, error, pending, submit, cancel, remove } = useCloudJobs();
+const { jobs, workerOnline, workerArms, error, pending, submit, cancel, remove } = useCloudJobs();
 </script>

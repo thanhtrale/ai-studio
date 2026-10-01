@@ -10,11 +10,14 @@ import {
   STORAGE_LOG_PREFIX,
   STORAGE_OUTPUT_PREFIX,
   WORKERS_PATH,
+  coerceJobValues,
+  jobTypeById,
   type CloudGalleryDoc,
   type CloudJobDoc,
   type CloudJobProgress,
-  type CloudVideoSettings,
+  type CloudJobResult,
   type CloudWorkerDoc,
+  type JobTypeSpec,
 } from '@ai-studio/cloud-contract';
 import type { JobProgress } from '@ai-studio/arm-contract';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -22,10 +25,6 @@ import type { Bucket } from '@google-cloud/storage';
 
 import { SupervisorClient } from '../supervisor';
 import { cloudAdmin, CloudConfigError } from './admin';
-
-/** The arm rejects anything that is not a multiple of these. */
-const SPATIAL_MULTIPLE = 32;
-const TEMPORAL_MULTIPLE = 8;
 
 const PROGRESS_POLL_MS = 2000;
 const HEARTBEAT_MS = 10_000;
@@ -38,6 +37,7 @@ export interface WorkerSnapshot {
   workerId: string;
   configured: boolean;
   currentJobId: string | null;
+  arms: string[];
   error: string | null;
   log: string[];
 }
@@ -48,16 +48,11 @@ export interface WorkerDependencies {
   supervisorToken: string;
 }
 
-function snapSpatial(value: number): number {
-  const clamped = Math.min(1920, Math.max(256, Math.round(value)));
-  return Math.round(clamped / SPATIAL_MULTIPLE) * SPATIAL_MULTIPLE;
-}
-
-/** The arm requires `8n + 1` frames; anything else is refused outright. */
-function snapFrames(seconds: number, frameRate: number): number {
-  const raw = Math.round(seconds * frameRate);
-  const snapped = Math.round((raw - 1) / TEMPORAL_MULTIPLE) * TEMPORAL_MULTIPLE + 1;
-  return Math.min(481, Math.max(9, snapped));
+/** One file the arm produced, however that arm spells it. */
+interface ArmOutput {
+  outPath: string;
+  index: number;
+  seed: number | null;
 }
 
 function extensionFor(contentType: string): string {
@@ -71,8 +66,7 @@ function extensionFor(contentType: string): string {
  *
  * The token is unguessable and the document holding it is readable only by a
  * signed-in user, which is the same bargain `getDownloadURL()` makes in the
- * browser. The alternative, a signed URL, expires and would leave the gallery
- * full of dead links.
+ * browser. A signed URL would expire and leave the gallery full of dead links.
  */
 function downloadUrl(bucketName: string, objectPath: string, token: string): string {
   return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
@@ -91,11 +85,42 @@ function summarise(progress: JobProgress): CloudJobProgress {
   };
 }
 
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Reads the finished files out of a report.
+ *
+ * Batch-capable arms list them under their own key; the diffusers arm returns
+ * the single path at the top level. Both spellings are the arm's, not ours.
+ */
+function outputsFrom(spec: JobTypeSpec, report: Record<string, unknown>): ArmOutput[] {
+  const listKey = spec.results.listKey;
+  if (listKey) {
+    const list = report[listKey];
+    if (!Array.isArray(list)) return [];
+    return list.map((entry, position) => {
+      const row = entry as Record<string, unknown>;
+      return {
+        outPath: String(row['out_path'] ?? ''),
+        index: numberOrNull(row['index']) ?? position,
+        seed: numberOrNull(row['seed']),
+      };
+    });
+  }
+
+  const single = report['out_path'];
+  if (typeof single !== 'string' || !single) return [];
+  return [{ outPath: single, index: 0, seed: numberOrNull(report['seed']) }];
+}
+
 class CloudWorker {
   #state: WorkerState = 'stopped';
   #error: string | null = null;
   #log: string[] = [];
   #current: string | null = null;
+  #arms: string[] = [];
   #busy = false;
 
   readonly #id = `${hostname()}-${process.pid}`;
@@ -113,14 +138,20 @@ class CloudWorker {
       workerId: this.#id,
       configured: Boolean(process.env['AISTUDIO_FIREBASE_SERVICE_ACCOUNT']),
       currentJobId: this.#current,
+      arms: this.#arms,
       error: this.#error,
       log: this.#log,
     };
   }
 
   #note(line: string) {
-    const stamped = `${new Date().toISOString()} ${line}`;
-    this.#log = [stamped, ...this.#log].slice(0, MAX_LOG_LINES);
+    this.#log = [`${new Date().toISOString()} ${line}`, ...this.#log].slice(0, MAX_LOG_LINES);
+  }
+
+  #client(): SupervisorClient {
+    const deps = this.#deps;
+    if (!deps) throw new Error('worker chưa được cấu hình');
+    return new SupervisorClient({ baseUrl: deps.supervisorUrl, token: deps.supervisorToken });
   }
 
   async start(deps: WorkerDependencies): Promise<WorkerSnapshot> {
@@ -135,11 +166,12 @@ class CloudWorker {
       this.#bucketName = admin.bucketName;
       this.#deps = deps;
 
+      await this.#refreshArms();
       await this.#announce('online');
       this.#heartbeat = setInterval(() => void this.#announce('online'), HEARTBEAT_MS);
 
       // Firestore pushes queued work; nothing polls. A job submitted while the
-      // worker was off is simply already in this result set when it subscribes.
+      // worker was off is already in this result set when it subscribes.
       this.#unsubscribe = this.#db
         .collection(JOBS_PATH.join('/'))
         .where('status', '==', 'queued')
@@ -181,6 +213,17 @@ class CloudWorker {
     return this.snapshot;
   }
 
+  /** Which arms the supervisor has, so the console can grey out the rest. */
+  async #refreshArms() {
+    try {
+      const inventory = await this.#client().inventory();
+      this.#arms = inventory.arms.map((arm) => arm.id);
+    } catch (cause) {
+      this.#arms = [];
+      this.#note(`không đọc được danh sách arm: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
   async #announce(status: 'online' | 'offline') {
     if (!this.#db) return;
     const doc: CloudWorkerDoc = {
@@ -190,6 +233,7 @@ class CloudWorker {
       startedAt: Date.now(),
       lastSeenAt: Date.now(),
       currentJobId: this.#current,
+      arms: this.#arms,
       error: this.#error,
     };
     await this.#db.doc([...WORKERS_PATH, this.#id].join('/')).set(doc, { merge: true });
@@ -213,7 +257,7 @@ class CloudWorker {
     }
   }
 
-  /** Wins the job or discovers someone else already has it. */
+  /** Wins the job, or discovers someone else already has it. */
   async #claim(jobId: string): Promise<boolean> {
     const db = this.#db;
     if (!db) return false;
@@ -238,10 +282,8 @@ class CloudWorker {
   async #run(job: CloudJobDoc) {
     const deps = this.#deps;
     const db = this.#db;
-    const bucket = this.#bucket;
-    if (!deps || !db || !bucket) return;
+    if (!deps || !db) return;
 
-    this.#current = job.id;
     const reference = db.doc([...JOBS_PATH, job.id].join('/'));
     const runLog: string[] = [];
     const record = (line: string) => {
@@ -249,28 +291,36 @@ class CloudWorker {
       this.#note(`[${job.id}] ${line}`);
     };
 
-    const client = new SupervisorClient({ baseUrl: deps.supervisorUrl, token: deps.supervisorToken });
+    const spec = jobTypeById(job.typeId);
+    if (!spec) {
+      await reference.update({
+        status: 'failed',
+        error: `Không biết loại job ${job.typeId}`,
+        endedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
+    this.#current = job.id;
     const startedAt = Date.now();
     await reference.update({ status: 'running', startedAt, updatedAt: startedAt });
     await this.#announce('online');
 
-    const settings = job.settings;
-    const outRelative = path.posix.join('cloud', `${job.id}.mp4`);
-    let imageRelative: string | null = null;
+    const outRelative = path.posix.join('cloud', `${job.id}.${spec.outputExtension}`);
 
     try {
-      if (job.reference) {
-        imageRelative = await this.#fetchReference(job, deps.storageDir);
-        record(`tải ảnh tham chiếu về ${imageRelative}`);
-      }
+      const referencePaths = await this.#fetchReferences(job, spec, deps.storageDir);
+      if (referencePaths.length) record(`tải ${referencePaths.length} ảnh tham chiếu về inputs/cloud/`);
 
-      const armJob = this.#buildArmJob(job, settings, outRelative, imageRelative);
-      record(`gửi job tới arm ${job.armId}: ${JSON.stringify(armJob)}`);
+      const armJob = this.#buildArmJob(spec, job, outRelative, referencePaths);
+      record(`gửi job tới arm ${spec.armId}: ${JSON.stringify(armJob)}`);
 
+      const client = this.#client();
       const poller = this.#pollProgress(client, job.id, reference, record);
       let report: Record<string, unknown>;
       try {
-        report = await client.job<Record<string, unknown>>(job.armId, {
+        report = await client.job<Record<string, unknown>>(spec.armId, {
           jobId: job.id,
           params: job.armParams,
           job: armJob,
@@ -288,7 +338,7 @@ class CloudWorker {
         return;
       }
 
-      await this.#publish(job, report, outRelative, runLog, startedAt);
+      await this.#publish(job, spec, report, runLog, startedAt);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       record(`thất bại: ${message}`);
@@ -303,25 +353,26 @@ class CloudWorker {
   }
 
   #buildArmJob(
+    spec: JobTypeSpec,
     job: CloudJobDoc,
-    settings: CloudVideoSettings,
     outRelative: string,
-    imageRelative: string | null,
+    referencePaths: string[],
   ): Record<string, unknown> {
-    return {
-      prompt: job.prompt,
-      ...(job.negativePrompt ? { negativePrompt: job.negativePrompt } : {}),
+    // Coerced again here: the document was written by a browser, and the arm
+    // answers an off-grid value with a 400 rather than a clip.
+    const payload: Record<string, unknown> = {
+      ...coerceJobValues(spec, job.values),
       outPath: outRelative,
-      ...(imageRelative ? { image: imageRelative } : {}),
-      width: snapSpatial(settings.width),
-      height: snapSpatial(settings.height),
-      numFrames: snapFrames(settings.seconds, settings.frameRate),
-      frameRate: settings.frameRate,
-      seed: settings.seed,
-      enhancePrompt: settings.enhancePrompt,
-      spatialUpsample: settings.spatialUpsample,
-      temporalUpsample: settings.temporalUpsample,
     };
+
+    // The arm's own field names, not a normalised one: `image` takes a path and
+    // `refImages` takes a positional list.
+    if (spec.references && referencePaths.length) {
+      payload[spec.references.field] =
+        spec.references.shape === 'single' ? referencePaths[0] : referencePaths;
+    }
+
+    return payload;
   }
 
   #pollProgress(
@@ -330,7 +381,7 @@ class CloudWorker {
     reference: FirebaseFirestore.DocumentReference,
     record: (line: string) => void,
   ) {
-    let lastLabel = '';
+    let last = '';
     return setInterval(() => {
       void (async () => {
         try {
@@ -339,8 +390,8 @@ class CloudWorker {
           // Only write when the stage changed or a meter moved, so a long run
           // does not turn into thousands of Firestore writes.
           const key = `${summary.label}:${summary.fraction?.toFixed(2) ?? ''}`;
-          if (key === lastLabel) return;
-          lastLabel = key;
+          if (key === last) return;
+          last = key;
           if (summary.label) record(`tiến độ: ${summary.label}`);
           await reference.update({ progress: summary, updatedAt: Date.now() });
         } catch {
@@ -351,23 +402,29 @@ class CloudWorker {
     }, PROGRESS_POLL_MS);
   }
 
-  async #fetchReference(job: CloudJobDoc, storageDir: string): Promise<string> {
+  async #fetchReferences(job: CloudJobDoc, spec: JobTypeSpec, storageDir: string): Promise<string[]> {
     const bucket = this.#bucket;
-    if (!bucket || !job.reference) throw new Error('không có ảnh tham chiếu');
+    if (!bucket || !spec.references) return [];
 
-    const relative = path.posix.join('cloud', `${job.id}${extensionFor(job.reference.contentType)}`);
-    const target = path.join(storageDir, 'inputs', relative);
-    await mkdir(path.dirname(target), { recursive: true });
+    const wanted = job.references.slice(0, spec.references.max);
+    const relatives: string[] = [];
 
-    const [buffer] = await bucket.file(job.reference.storagePath).download();
-    await writeFile(target, buffer);
-    return relative;
+    for (const [index, entry] of wanted.entries()) {
+      const relative = path.posix.join('cloud', `${job.id}-${index}${extensionFor(entry.contentType)}`);
+      const target = path.join(storageDir, 'inputs', relative);
+      await mkdir(path.dirname(target), { recursive: true });
+      const [buffer] = await bucket.file(entry.storagePath).download();
+      await writeFile(target, buffer);
+      relatives.push(relative);
+    }
+
+    return relatives;
   }
 
   async #publish(
     job: CloudJobDoc,
+    spec: JobTypeSpec,
     report: Record<string, unknown>,
-    outRelative: string,
     runLog: string[],
     startedAt: number,
   ) {
@@ -376,63 +433,83 @@ class CloudWorker {
     const deps = this.#deps;
     if (!db || !bucket || !deps) return;
 
-    const localPath = path.join(deps.storageDir, 'outputs', outRelative);
-    const info = await stat(localPath);
+    const outputs = outputsFrom(spec, report);
+    if (!outputs.length) throw new Error('arm không báo tệp nào được tạo');
 
-    const objectPath = `${STORAGE_OUTPUT_PREFIX}/${job.id}.mp4`;
-    const token = randomUUID();
-    await bucket.upload(localPath, {
-      destination: objectPath,
-      metadata: {
-        contentType: 'video/mp4',
-        metadata: { firebaseStorageDownloadTokens: token },
-      },
-    });
-    runLog.push(`${new Date().toISOString()} đã upload ${objectPath} (${info.size} bytes)`);
-
-    const logUrl = await this.#writeLog(job.id, runLog);
+    const contentType = spec.outputExtension === 'mp4' ? 'video/mp4' : 'image/png';
     const endedAt = Date.now();
-    const galleryId = job.id;
+    const seconds = numberOrNull(report['seconds_total']) ?? (endedAt - startedAt) / 1000;
+    const results: CloudJobResult[] = [];
 
-    const gallery: CloudGalleryDoc = {
-      id: galleryId,
-      jobId: job.id,
-      armId: job.armId,
-      createdAt: endedAt,
-      createdBy: job.createdBy,
-      prompt: job.prompt,
-      negativePrompt: job.negativePrompt,
-      promptUsed: typeof report['prompt_used'] === 'string' ? (report['prompt_used'] as string) : null,
-      settings: job.settings,
-      media: {
+    for (const output of outputs) {
+      // Reports spell the path either way depending on the arm; both resolve
+      // against the same managed output root.
+      const localPath = path.isAbsolute(output.outPath)
+        ? output.outPath
+        : path.join(deps.storageDir, 'outputs', output.outPath);
+      const info = await stat(localPath);
+
+      const galleryId = outputs.length > 1 ? `${job.id}-${output.index}` : job.id;
+      const objectPath = `${STORAGE_OUTPUT_PREFIX}/${galleryId}.${spec.outputExtension}`;
+      const token = randomUUID();
+
+      await bucket.upload(localPath, {
+        destination: objectPath,
+        metadata: { contentType, metadata: { firebaseStorageDownloadTokens: token } },
+      });
+      runLog.push(`${new Date().toISOString()} đã upload ${objectPath} (${info.size} bytes)`);
+
+      results.push({
+        galleryId,
         storagePath: objectPath,
         downloadUrl: downloadUrl(this.#bucketName, objectPath, token),
-        contentType: 'video/mp4',
         bytes: info.size,
-        width: typeof report['width'] === 'number' ? (report['width'] as number) : job.settings.width,
-        height: typeof report['height'] === 'number' ? (report['height'] as number) : job.settings.height,
-        durationSeconds: job.settings.seconds,
-      },
-      report,
-      logTail: runLog.slice(-INLINE_LOG_TAIL_LINES).join('\n'),
-      logUrl,
-      seconds: typeof report['seconds_total'] === 'number' ? (report['seconds_total'] as number) : (endedAt - startedAt) / 1000,
-    };
+        seconds,
+        seed: output.seed ?? -1,
+      });
+    }
 
-    await db.doc([...GALLERY_PATH, galleryId].join('/')).set(gallery);
+    const logUrl = await this.#writeLog(job.id, runLog);
+    const logTail = runLog.slice(-INLINE_LOG_TAIL_LINES).join('\n');
+
+    const frames = numberOrNull(report['num_frames']) ?? numberOrNull(job.values['numFrames']);
+    const fps = numberOrNull(report['frame_rate']) ?? numberOrNull(job.values['frameRate']) ?? 24;
+
+    for (const [position, result] of results.entries()) {
+      const entry: CloudGalleryDoc = {
+        id: result.galleryId,
+        jobId: job.id,
+        typeId: job.typeId,
+        armId: job.armId,
+        modality: spec.modality,
+        createdAt: endedAt,
+        createdBy: job.createdBy,
+        values: job.values,
+        promptUsed: typeof report['prompt_used'] === 'string' ? (report['prompt_used'] as string) : null,
+        media: {
+          storagePath: result.storagePath,
+          downloadUrl: result.downloadUrl,
+          contentType,
+          bytes: result.bytes,
+          width: numberOrNull(report['width']) ?? numberOrNull(job.values['width']),
+          height: numberOrNull(report['height']) ?? numberOrNull(job.values['height']),
+          durationSeconds: spec.modality === 'video' && frames ? frames / fps : null,
+        },
+        index: outputs[position]?.index ?? position,
+        report,
+        logTail,
+        logUrl,
+        seconds,
+      };
+      await db.doc([...GALLERY_PATH, result.galleryId].join('/')).set(entry);
+    }
+
     await db.doc([...JOBS_PATH, job.id].join('/')).update({
       status: 'done',
       endedAt,
       updatedAt: endedAt,
       progress: null,
-      result: {
-        galleryId,
-        storagePath: objectPath,
-        downloadUrl: gallery.media.downloadUrl,
-        bytes: info.size,
-        seconds: gallery.seconds,
-        seed: typeof report['seed'] === 'number' ? (report['seed'] as number) : job.settings.seed,
-      },
+      results,
     });
   }
 

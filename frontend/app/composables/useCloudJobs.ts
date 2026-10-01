@@ -13,20 +13,18 @@ import {
 } from 'firebase/firestore';
 import {
   JOBS_PATH,
-  VIDEO_ARM_ID,
   WORKERS_PATH,
   isWorkerAlive,
   type CloudJobDoc,
   type CloudJobReference,
-  type CloudVideoSettings,
   type CloudWorkerDoc,
 } from '@ai-studio/cloud-contract';
 
 export interface JobSubmission {
-  prompt: string;
-  negativePrompt: string;
-  settings: CloudVideoSettings;
-  reference: CloudJobReference | null;
+  typeId: string;
+  armId: string;
+  values: Record<string, unknown>;
+  references: CloudJobReference[];
 }
 
 export function useCloudJobs() {
@@ -42,7 +40,10 @@ export function useCloudJobs() {
   // any document change: a worker that dies stops writing, so nothing arrives to
   // trigger a recompute.
   const now = ref(Date.now());
-  const workerOnline = computed(() => workers.value.some((w) => isWorkerAlive(w, now.value)));
+  const liveWorkers = computed(() => workers.value.filter((worker) => isWorkerAlive(worker, now.value)));
+  const workerOnline = computed(() => liveWorkers.value.length > 0);
+  /** Arms any live worker reports, so the form can flag a job type that cannot run. */
+  const workerArms = computed(() => [...new Set(liveWorkers.value.flatMap((worker) => worker.arms ?? []))]);
 
   let unsubscribes: Unsubscribe[] = [];
   let ticker: ReturnType<typeof setInterval> | null = null;
@@ -87,12 +88,11 @@ export function useCloudJobs() {
     const at = Date.now();
     const payload: CloudJobDoc = {
       id: reference.id,
-      armId: VIDEO_ARM_ID,
+      typeId: input.typeId,
+      armId: input.armId,
       status: 'queued',
-      prompt: input.prompt,
-      negativePrompt: input.negativePrompt,
-      settings: input.settings,
-      reference: input.reference,
+      values: input.values,
+      references: input.references,
       armParams: {},
       createdAt: at,
       updatedAt: at,
@@ -104,7 +104,7 @@ export function useCloudJobs() {
       progress: null,
       error: null,
       attempts: 0,
-      result: null,
+      results: [],
     };
 
     await setDoc(reference, payload);
@@ -131,5 +131,5 @@ export function useCloudJobs() {
     if (ticker) clearInterval(ticker);
   });
 
-  return { jobs, workers, workerOnline, error, pending, submit, cancel, remove };
+  return { jobs, workers, workerOnline, workerArms, error, pending, submit, cancel, remove };
 }

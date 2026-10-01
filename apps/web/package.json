@@ -13,6 +13,7 @@
   "dependencies": {
     "@ai-studio/arm-contract": "*",
     "@ai-studio/cloud-contract": "*",
+    "@ai-studio/frame-math": "*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "firebase-admin": "^13.6.0",
     "nuxt": "^4.5.2",

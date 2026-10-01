@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ai-studio/cloud-contract": "*",
+    "@ai-studio/frame-math": "*",
     "firebase": "^12.4.0",
     "nuxt": "^4.5.2",
     "vue": "^3.5.42"

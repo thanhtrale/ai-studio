@@ -8,11 +8,10 @@
  * a null would read better.
  */
 
+export * from './job-types';
+
 /** Collection path under which every document this product writes lives. */
 export const CLOUD_ROOT = 'ai-studio';
-
-/** The only arm this console submits to today. */
-export const VIDEO_ARM_ID = 'video-ltx25-diffusers';
 
 /** `ai-studio/video/jobs/{jobId}` */
 export const JOBS_PATH: [string, string, string] = [CLOUD_ROOT, 'video', 'jobs'];
@@ -53,35 +52,48 @@ export interface CloudJobOwner {
 }
 
 /**
- * The knobs the console exposes. A subset of the local console's
- * `VideoJobSettings`, carrying only what a remote submitter can meaningfully
- * decide; the worker fills in the rest from its own defaults.
+ * The knobs the console exposes are declared per job type in `job-types.ts`.
+ * A job carries the type id and a flat bag of values keyed by the arm's own
+ * field names, so adding an arm is a data change rather than a schema change.
  */
-export interface CloudVideoSettings {
-  width: number;
-  height: number;
-  /** Clip length in seconds; the worker derives `numFrames` when this is set. */
-  seconds: number;
-  frameRate: number;
-  /** -1 means the worker picks one and reports it back. */
-  seed: number;
-  steps: number | null;
-  enhancePrompt: boolean;
-  spatialUpsample: boolean;
-  temporalUpsample: boolean;
+export interface CloudJobDoc {
+  id: string;
+  /** Which `JobTypeSpec` this was built from. */
+  typeId: string;
+  armId: string;
+  status: CloudJobStatus;
+  /** Keyed by the arm's field names; validated against the spec on both ends. */
+  values: Record<string, unknown>;
+  references: CloudJobReference[];
+  /** Arm start parameters, passed through untouched. */
+  armParams: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: CloudJobOwner;
+  /** Worker id holding the claim, or null while queued. */
+  claimedBy: string | null;
+  claimedAt: number | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  progress: CloudJobProgress | null;
+  error: string | null;
+  /** Incremented on every claim, so a job that keeps crashing can be spotted. */
+  attempts: number;
+  /** One entry per file the run produced; a batch produces several. */
+  results: CloudJobResult[];
 }
 
-export const DEFAULT_VIDEO_SETTINGS: CloudVideoSettings = {
-  width: 1216,
-  height: 704,
-  seconds: 5,
-  frameRate: 24,
-  seed: -1,
-  steps: null,
-  enhancePrompt: false,
-  spatialUpsample: true,
-  temporalUpsample: true,
-};
+/** What the console is allowed to put in a new job document. */
+export type NewCloudJob = Pick<
+  CloudJobDoc,
+  'id' | 'typeId' | 'armId' | 'values' | 'references' | 'armParams'
+>;
+
+/** The headline a list can show without knowing which arm ran. */
+export function jobTitle(job: Pick<CloudJobDoc, 'values'>): string {
+  const prompt = job.values['prompt'];
+  return typeof prompt === 'string' && prompt.trim() ? prompt.trim() : '(không có prompt)';
+}
 
 /**
  * A reference frame, uploaded to Storage before the job document is written.
@@ -119,37 +131,6 @@ export interface CloudJobResult {
   seed: number;
 }
 
-export interface CloudJobDoc {
-  id: string;
-  armId: string;
-  status: CloudJobStatus;
-  prompt: string;
-  negativePrompt: string;
-  settings: CloudVideoSettings;
-  reference: CloudJobReference | null;
-  /** Arm start parameters, passed through untouched. */
-  armParams: Record<string, unknown>;
-  createdAt: number;
-  updatedAt: number;
-  createdBy: CloudJobOwner;
-  /** Worker id holding the claim, or null while queued. */
-  claimedBy: string | null;
-  claimedAt: number | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  progress: CloudJobProgress | null;
-  error: string | null;
-  /** Incremented on every claim, so a job that keeps crashing can be spotted. */
-  attempts: number;
-  result: CloudJobResult | null;
-}
-
-/** What the console is allowed to put in a new job document. */
-export type NewCloudJob = Pick<
-  CloudJobDoc,
-  'id' | 'armId' | 'prompt' | 'negativePrompt' | 'settings' | 'reference' | 'armParams'
->;
-
 export interface CloudGalleryMedia {
   storagePath: string;
   downloadUrl: string;
@@ -163,15 +144,18 @@ export interface CloudGalleryMedia {
 export interface CloudGalleryDoc {
   id: string;
   jobId: string;
+  typeId: string;
   armId: string;
+  modality: 'video' | 'image';
   createdAt: number;
   createdBy: CloudJobOwner;
-  prompt: string;
-  negativePrompt: string;
+  /** The job's values verbatim, so the entry explains how it was made. */
+  values: Record<string, unknown>;
   /** What actually reached the model, when the enhancer rewrote the prompt. */
   promptUsed: string | null;
-  settings: CloudVideoSettings;
   media: CloudGalleryMedia;
+  /** Which file of a batch this is, zero-based. */
+  index: number;
   /** The arm's own report, verbatim. */
   report: Record<string, unknown>;
   /**
@@ -192,6 +176,9 @@ export interface CloudWorkerDoc {
   startedAt: number;
   lastSeenAt: number;
   currentJobId: string | null;
+  /** Arm ids the supervisor reports as installed, so the console can say which
+   * job types are actually runnable on this machine. */
+  arms: string[];
   /** Set when the worker stopped on its own rather than being switched off. */
   error: string | null;
 }

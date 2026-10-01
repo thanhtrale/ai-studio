@@ -12,7 +12,7 @@ import {
   resolveH3Duration,
   resolveImageFrame,
   resolveOutput,
-} from './frame';
+} from './index';
 
 describe('resolveFrame', () => {
   it('rounds width from the rounded height, not from the raw one', () => {
