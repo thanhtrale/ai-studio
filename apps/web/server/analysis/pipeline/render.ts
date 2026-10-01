@@ -58,9 +58,87 @@ function evidenceOf(requirement: Requirement, names: Map<string, string>): strin
   return parts.length ? ` <sub>${parts.join(' ')}</sub>` : '';
 }
 
+export interface RenderGapsInput {
+  record: Pick<AnalysisRecord, 'blockName'>;
+  ticket: NormalisedTicket;
+  gaps: readonly Gap[];
+  inferences: readonly Inference[];
+}
+
+/**
+ * The gaps on their own, as a list of questions to take to a person.
+ *
+ * `requirements.md` already carries the gaps, and this is not a duplicate of
+ * that section -- it is a different use. The requirement document is read top
+ * to bottom to learn what the block is; this is read in a meeting, one item at
+ * a time, to close the things nobody has decided. So each gap gets a heading of
+ * its own and the question is the last line, where it is easiest to act on.
+ *
+ * The machine's copy of the same material is `gaps.json`, which is what a tool
+ * reads. This is what a person reads.
+ */
+export function renderGaps(input: RenderGapsInput): string {
+  const { record, ticket, gaps, inferences } = input;
+  const names = passageNames(ticket);
+  const out: string[] = [];
+
+  out.push(`# ${record.blockName} — open questions (${gaps.length})`);
+  out.push('');
+
+  if (gaps.length === 0) {
+    out.push('_Nothing was left undecided. On a real ticket that is worth being suspicious about._');
+    out.push('');
+  } else {
+    out.push(
+      '> Each of these needs an answer from a person. The design is the authority on what exists, ' +
+        'so where the two sources disagree it is the ticket that needs correcting, not the design.',
+    );
+    out.push('');
+  }
+
+  const byKind = GAP_ORDER.map((kind) => ({
+    kind,
+    entries: gaps.filter((gap) => gap.kind === kind),
+  })).filter((group) => group.entries.length > 0);
+
+  for (const group of byKind) {
+    out.push(`## ${GAP_HEADING[group.kind]} (${group.entries.length})`);
+    out.push('');
+    for (const gap of group.entries) {
+      out.push(`### ${gap.statement}`);
+      out.push('');
+      if (gap.designReading) out.push(`- **The design shows:** ${gap.designReading}`);
+      if (gap.ticketReading) out.push(`- **The ticket claims:** ${gap.ticketReading}`);
+      const cited = citations(gap.evidence, names);
+      if (cited.length) out.push(`- Evidence: ${cited.join(' ')}`);
+      out.push(`- **Ask:** ${gap.question}`);
+      out.push('');
+    }
+  }
+
+  if (inferences.length > 0) {
+    out.push(`## Unsupported statements (${inferences.length})`);
+    out.push('');
+    out.push(
+      '_Stated by the model and supported by neither source. Not questions for anybody — they are ' +
+        'here because a guess is often right, and because seeing what the model reached for says ' +
+        'something about the run._',
+    );
+    out.push('');
+    for (const inference of inferences) {
+      out.push(`- ${inference.statement}`);
+      out.push(`  - _${inference.reason}_`);
+    }
+    out.push('');
+  }
+
+  return `${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
+}
+
 export interface RenderInput {
   record: Pick<AnalysisRecord, 'blockName' | 'armId' | 'startedAt'>;
-  design: NormalisedDesign;
+  /** Every frame that was read, in the order they were given. */
+  designs: readonly NormalisedDesign[];
   ticket: NormalisedTicket;
   requirements: readonly Requirement[];
   inferences: readonly Inference[];
@@ -68,15 +146,26 @@ export interface RenderInput {
 }
 
 export function renderRequirements(input: RenderInput): string {
-  const { record, design, ticket } = input;
+  const { record, designs, ticket } = input;
   const names = passageNames(ticket);
   const out: string[] = [];
 
   out.push(`# ${record.blockName}`);
   out.push('');
 
+  // One line per frame. A reader has to be able to tell a requirement drawn
+  // from three viewports from one drawn from a single desktop frame, because
+  // the second says nothing at all about what happens on a phone.
+  const frames = designs.map((design) => {
+    const where = `Figma \`${design.fileKey}\` node \`${design.nodeId}\``;
+    const size = design.width === undefined ? '' : `, ${Math.round(design.width)} wide`;
+    return designs.length === 1
+      ? `Design — ${where}${design.name ? ` (${design.name})` : ''}`
+      : `Design — ${design.label}${size} — ${where}`;
+  });
+
   const sources = [
-    `Design — Figma \`${design.fileKey}\` node \`${design.nodeId}\`${design.name ? ` (${design.name})` : ''}`,
+    ...frames,
     `Ticket — ${ticket.key ?? 'imported'}${ticket.summary ? `: ${ticket.summary}` : ''} (${ticket.format})`,
     `Analysed by \`${record.armId}\` on ${record.startedAt.slice(0, 10)}`,
   ];
@@ -143,11 +232,18 @@ export function renderRequirements(input: RenderInput): string {
   }
 
   const notes: string[] = [];
-  if (design.droppedNodes > 0) {
-    notes.push(`${design.droppedNodes} hidden or decorative nodes were removed from the design outline.`);
+  const dropped = designs.reduce((total, design) => total + design.droppedNodes, 0);
+  if (dropped > 0) {
+    notes.push(`${dropped} hidden or decorative nodes were removed from the design outline.`);
   }
-  if (design.truncatedAtDepth !== undefined) {
-    notes.push(`The design outline was cut at depth ${design.truncatedAtDepth} to fit the context.`);
+  // Named individually: one viewport being cut and another not is the kind of
+  // asymmetry that would otherwise explain a strange finding silently.
+  for (const design of designs.filter((entry) => entry.truncatedAtDepth !== undefined)) {
+    notes.push(
+      designs.length === 1
+        ? `The design outline was cut at depth ${design.truncatedAtDepth} to fit the context.`
+        : `The ${design.label} outline was cut at depth ${design.truncatedAtDepth} to fit the context.`,
+    );
   }
   if (ticket.attachments.length > 0) {
     notes.push(

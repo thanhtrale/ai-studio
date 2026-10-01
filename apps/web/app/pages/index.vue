@@ -48,7 +48,7 @@ const FUNCTIONS: StudioFunction[] = [
     key: 'image',
     title: 'Image generation',
     blurb:
-      'Qwen-Image-Edit on stable-diffusion.cpp. Text-to-image, or up to four reference images composed into one edit, with a batch that writes every attempt to the library separately.',
+      'Qwen-Image-Edit 2511 on ComfyUI. Text-to-image, or up to three reference images composed into one edit, with a batch that writes every attempt to the library separately.',
     modality: 'image',
     capability: 'image.generate',
     to: '/generate/image',
@@ -65,6 +65,18 @@ const FUNCTIONS: StudioFunction[] = [
     capability: 'text.generate',
     to: '/analyze/block',
     glyph: '◇',
+  },
+  {
+    key: 'survey',
+    title: 'Figma survey',
+    blurb:
+      'A whole Figma file, indexed. Every screen with the viewports it was drawn at, every component ' +
+      'under the name the designer gave it, each one pointing back at its node — and a local model ' +
+      'grouping them into modules.',
+    modality: 'text',
+    capability: 'text.generate',
+    to: '/analyze/figma',
+    glyph: '▤',
   },
 ];
 
@@ -148,21 +160,6 @@ const recent = computed(() =>
           </UiCard>
         </NuxtLink>
 
-        <NuxtLink to="/lan" class="block">
-          <UiCard interactive class="h-full">
-            <div class="space-y-3 p-5">
-              <div class="flex items-start justify-between gap-3">
-                <span class="text-xl text-indigo-400">&#8646;</span>
-                <UiBadge tone="neutral">local network</UiBadge>
-              </div>
-              <h2 class="text-base font-semibold text-slate-100">LAN transfer</h2>
-              <p class="text-sm text-slate-400">
-                Send files to another machine running the studio on the same network, or collect what it sent
-                here. No login: the receiver opens its inbox and reads out an address.
-              </p>
-            </div>
-          </UiCard>
-        </NuxtLink>
       </section>
     </div>
   </div>

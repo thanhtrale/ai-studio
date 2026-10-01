@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  alignH3Frames,
   aspectRatio,
   frameForRatio,
+  h3Canvas,
   IMAGE_MULTIPLE,
   latentTokens,
   resolveDuration,
   resolveFrame,
+  resolveH3Duration,
   resolveImageFrame,
   resolveOutput,
 } from './frame';
@@ -85,6 +88,46 @@ describe('resolveDuration', () => {
 describe('latentTokens', () => {
   it('matches the transformer’s sequence length at 960x544x121', () => {
     expect(latentTokens(960, 544, 121)).toBe(8160);
+  });
+});
+
+describe('resolveH3Duration', () => {
+  it('rounds 5 s to the 17k+5 frame the model actually accepts', () => {
+    expect(resolveH3Duration(5)).toEqual({ numFrames: 124, seconds: 124 / 24 });
+  });
+
+  it('always lands on 17k+5', () => {
+    for (const seconds of [0, 0.5, 1, 2.5, 5, 7.3, 12, 15]) {
+      expect(resolveH3Duration(seconds).numFrames % 17).toBe(5);
+    }
+  });
+
+  it('rounds up to the next length that exists, not the nearest round number', () => {
+    // 100 frames is 4.17 s, and the next length the temporal pack can express
+    // is 107 rather than 102 or 124.
+    expect(alignH3Frames(100)).toBe(107);
+    expect(alignH3Frames(1)).toBe(5);
+  });
+
+  it('stops at the longest clip the model was trained for', () => {
+    expect(resolveH3Duration(30).numFrames).toBe(362);
+  });
+});
+
+describe('h3Canvas', () => {
+  it('is a 768 short edge under the model’s area cap', () => {
+    expect(h3Canvas(16 / 9)).toEqual({ width: 1344, height: 768 });
+    expect(h3Canvas(9 / 16)).toEqual({ width: 768, height: 1344 });
+    expect(h3Canvas(1)).toEqual({ width: 768, height: 768 });
+  });
+
+  it('never exceeds the cap, however wide the shape', () => {
+    for (const ratio of [21 / 9, 16 / 9, 4 / 3, 1, 3 / 4, 9 / 16]) {
+      const { width, height } = h3Canvas(ratio);
+      expect(width % 32).toBe(0);
+      expect(height % 32).toBe(0);
+      expect(width * height).toBeLessThanOrEqual(768 * 1344);
+    }
   });
 });
 

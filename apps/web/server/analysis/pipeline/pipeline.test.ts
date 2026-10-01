@@ -12,6 +12,7 @@ import { AnalysisRun, clearRuns } from '../registry';
 import { readArtifact, readRecord } from '../store';
 import { analyse, modelFileName } from './analyse';
 import { checkClaims, checkElements, checkEvidence, evidenceSets } from './evidence';
+import { designInventoryPass } from './passes';
 import { renderRequirements } from './render';
 import type { ArmCaller, ArmTextReport } from './runner';
 import { PassError, extractJson, runPass } from './runner';
@@ -445,6 +446,7 @@ const DESIGN: NormalisedDesign = {
   fileKey: 'AbCdEf123456',
   nodeId: '1:1',
   name: 'Featured Story Card',
+  label: 'Featured Story Card',
   digest: '#1:1 FRAME "Featured Story Card"\n  #1:2 TEXT "Headline"',
   nodeIds: ['1:1', '1:2'],
   tokens: [],
@@ -461,11 +463,39 @@ const TICKET: NormalisedTicket = {
   attachments: [{ id: '40139', name: 'desktop.png' }],
 };
 
+/** The same block at a narrower width, with its own ids for the same parts. */
+const MOBILE: NormalisedDesign = {
+  adapter: 'stub',
+  fileKey: 'AbCdEf123456',
+  nodeId: '2:1',
+  name: 'Featured Story Card',
+  label: 'Featured Story Card',
+  width: 390,
+  digest: '#2:1 FRAME "Featured Story Card"\n  #2:2 TEXT "Headline"',
+  nodeIds: ['2:1', '2:2'],
+  tokens: [],
+  droppedNodes: 1,
+};
+
 function stubDesign(read?: Partial<DesignRead>): DesignSource {
   return {
     name: 'stub',
     async read() {
       return { design: DESIGN, degraded: [], ...read } as DesignRead;
+    },
+  };
+}
+
+/** Hands out one design per call, so a run can read several frames. */
+function stubDesigns(designs: readonly NormalisedDesign[]): DesignSource {
+  let at = 0;
+  return {
+    name: 'stub',
+    async read() {
+      const design = designs[at++] ?? designs[designs.length - 1];
+      // Copied, because the pipeline relabels what it is given and a shared
+      // object would carry one test's labels into the next.
+      return { design: { ...design }, degraded: [] } as DesignRead;
     },
   };
 }
@@ -524,7 +554,7 @@ describe('analyse', () => {
       analysisId: 'analysis-0001',
       blockName: 'featured-story-card',
       armId: 'text-arm',
-      reference: { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+      references: [{ fileKey: 'AbCdEf123456', nodeId: '1:1' }],
       ticket: TICKET,
       design: stubDesign(),
       caller: stubArm(ANSWERS),
@@ -550,7 +580,7 @@ describe('analyse', () => {
       analysisId: 'analysis-0001',
       blockName: 'featured-story-card',
       armId: 'text-arm',
-      reference: { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+      references: [{ fileKey: 'AbCdEf123456', nodeId: '1:1' }],
       ticket: TICKET,
       design: stubDesign(),
       caller: stubArm(ANSWERS),
@@ -569,7 +599,7 @@ describe('analyse', () => {
       analysisId: 'analysis-0001',
       blockName: 'featured-story-card',
       armId: 'text-arm',
-      reference: { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+      references: [{ fileKey: 'AbCdEf123456', nodeId: '1:1' }],
       ticket: TICKET,
       design: stubDesign(),
       caller: stubArm(ANSWERS),
@@ -591,7 +621,7 @@ describe('analyse', () => {
         analysisId: 'analysis-0001',
         blockName: 'featured-story-card',
         armId: 'text-arm',
-        reference: { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+        references: [{ fileKey: 'AbCdEf123456', nodeId: '1:1' }],
         ticket: TICKET,
         design: stubDesign(),
         caller: stubArm({ p1: 'junk', p1r: 'junk' }),
@@ -621,7 +651,7 @@ describe('analyse', () => {
         analysisId: 'analysis-0001',
         blockName: 'x',
         armId: 'text-arm',
-        reference: { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+        references: [{ fileKey: 'AbCdEf123456', nodeId: '1:1' }],
         ticket: TICKET,
         design: failing,
         caller: stubArm({}),
@@ -635,11 +665,136 @@ describe('analyse', () => {
   });
 });
 
+describe('designInventoryPass', () => {
+  it('says nothing about viewports when it read one frame', () => {
+    const pass = designInventoryPass([DESIGN], 'featured-story-card');
+    const prompt = pass.request.messages[0]?.content ?? '';
+    // The single-frame wording was measured, so it is asserted to be untouched.
+    expect(pass.request.system).not.toMatch(/viewport/i);
+    expect(prompt).toContain('DESIGN OUTLINE --');
+    expect(prompt).not.toContain('VIEW 1');
+    expect(prompt).not.toContain('responsive');
+  });
+
+  it('tells the model that several frames are one block, and labels each', () => {
+    const pass = designInventoryPass([DESIGN, MOBILE], 'featured-story-card');
+    const prompt = pass.request.messages[0]?.content ?? '';
+
+    // The failure this prevents: three frames read as three blocks, and a
+    // content model with three headline fields.
+    expect(pass.request.system).toContain('SAME block at several viewports');
+    expect(prompt).toContain('THE SAME BLOCK drawn at 2 viewports');
+    expect(prompt).toContain('=== VIEW 1 of 2: "Featured Story Card" ===');
+    expect(prompt).toContain('=== VIEW 2 of 2: "Featured Story Card", 390 wide ===');
+
+    // Both outlines reach it, so an element may be cited from either.
+    expect(prompt).toContain('#1:2 TEXT');
+    expect(prompt).toContain('#2:2 TEXT');
+    expect(prompt).toContain('"responsive"');
+  });
+});
+
+describe('analyse, at several viewports', () => {
+  const REFERENCES = [
+    { fileKey: 'AbCdEf123456', nodeId: '1:1' },
+    { fileKey: 'AbCdEf123456', nodeId: '2:1' },
+  ];
+
+  const ANSWERS_ACROSS_VIEWS = {
+    ...ANSWERS,
+    p1: JSON.stringify({
+      elements: [
+        {
+          nodeId: '1:2',
+          role: 'headline',
+          kind: 'text',
+          repeated: false,
+          responsive: 'wraps to two lines below 768',
+        },
+        // Cited from the second frame. It survives only if every view's ids
+        // went into one evidence set.
+        { nodeId: '2:2', role: 'headline', kind: 'text', repeated: false },
+      ],
+    }),
+  };
+
+  async function runTwoViews(): ReturnType<typeof analyse> {
+    return analyse({
+      storageDir: storage,
+      analysisId: 'analysis-0001',
+      blockName: 'featured-story-card',
+      armId: 'text-arm',
+      references: REFERENCES,
+      ticket: TICKET,
+      design: stubDesigns([DESIGN, MOBILE]),
+      caller: stubArm(ANSWERS_ACROSS_VIEWS),
+      run: new AnalysisRun('analysis-0001', 'text-arm'),
+    });
+  }
+
+  it('accepts a citation from whichever frame showed the element', async () => {
+    const run = new AnalysisRun('analysis-0001', 'text-arm');
+    await analyse({
+      storageDir: storage,
+      analysisId: 'analysis-0001',
+      blockName: 'featured-story-card',
+      armId: 'text-arm',
+      references: REFERENCES,
+      ticket: TICKET,
+      design: stubDesigns([DESIGN, MOBILE]),
+      caller: stubArm(ANSWERS_ACROSS_VIEWS),
+      run,
+    });
+
+    const steps = run.progress().steps;
+    expect(steps.find((step) => step.key === 'pass1')?.detail).toBe('2 elements');
+    // Nothing was dropped: `2:2` is a real id, in the second frame.
+    expect(steps.find((step) => step.key === 'pass1')?.note).toBeUndefined();
+    expect(steps.find((step) => step.key === 'design')?.detail).toBe('2 views · 4 nodes · 4 dropped');
+  });
+
+  it('records every frame, and tells two of the same name apart', async () => {
+    const result = await runTwoViews();
+
+    expect(result.record.designs).toEqual([
+      {
+        adapter: 'stub',
+        fileKey: 'AbCdEf123456',
+        nodeId: '1:1',
+        label: 'Featured Story Card',
+        name: 'Featured Story Card',
+      },
+      {
+        adapter: 'stub',
+        fileKey: 'AbCdEf123456',
+        nodeId: '2:1',
+        label: 'Featured Story Card (2)',
+        name: 'Featured Story Card',
+        width: 390,
+      },
+    ]);
+  });
+
+  it('names both frames in the report, so nobody mistakes it for a desktop-only reading', async () => {
+    const result = await runTwoViews();
+    expect(result.markdown).toContain('Design — Featured Story Card — Figma');
+    expect(result.markdown).toContain('Design — Featured Story Card (2), 390 wide — Figma');
+  });
+
+  it('writes every view to design.json, not just the primary', async () => {
+    await runTwoViews();
+    const written = JSON.parse(
+      (await readArtifact(storage, 'analysis-0001', 'design.json')) ?? '[]',
+    ) as unknown[];
+    expect(written).toHaveLength(2);
+  });
+});
+
 describe('renderRequirements', () => {
   it('leads with the requirement and keeps the evidence beside it', () => {
     const markdown = renderRequirements({
       record: { blockName: 'featured-story-card', armId: 'text-arm', startedAt: '2026-09-22T10:00:00.000Z' },
-      design: DESIGN,
+      designs: [DESIGN],
       ticket: TICKET,
       requirements: [
         { id: 'r1', statement: 'The headline is one text field.', evidence: { nodeIds: ['1:2'], passageIds: [] } },

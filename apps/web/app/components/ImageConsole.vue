@@ -16,6 +16,7 @@ import { computed, ref, watch } from 'vue';
 import type { ArmSummary } from '@ai-studio/arm-contract';
 
 import type { ArmImageReport, ImageGenerateRequest, ImageGenerateResponse } from '#shared/generate';
+import { mergePrompt } from '#shared/generate';
 import { ratioLabel } from '#shared/image-size';
 import {
   formatBytes,
@@ -32,6 +33,7 @@ import {
   MAX_EDGE,
   MIN_EDGE,
   REFERENCE_ASPECT,
+  SPATIAL_MULTIPLE,
   type Aspect,
 } from '../utils/frame';
 import { restoreKey } from '../utils/restore';
@@ -58,11 +60,22 @@ const props = defineProps<{
   initialReference?: string | null;
 }>();
 
-/** Qwen-Image-Edit composes its references rather than choosing between them. */
-const MAX_REFERENCES = 4;
-/** `limits.max_batch_count` from the child's capabilities, not a guess. */
-const MAX_BATCH = 8;
-const BATCH_PRESETS = [1, 2, 4, MAX_BATCH];
+/**
+ * Qwen-Image-Edit composes its references rather than choosing between them.
+ *
+ * Three, not four: ComfyUI's `TextEncodeQwenImageEditPlus` takes image1
+ * through image3 and has nowhere to put a fourth.
+ */
+const MAX_REFERENCES = 3;
+/**
+ * One ComfyUI prompt per image, so a batch costs no extra VRAM.
+ *
+ * The ceiling is about time: the request stays open until the last file is
+ * written, and this arm holds the card for all of it. It is a guard against a
+ * mistyped number, not a limit of the machine.
+ */
+const MAX_BATCH = 100;
+const BATCH_PRESETS = [1, 2, 4, 8, 16];
 
 /**
  * Why a peak might not be this arm's own.
@@ -79,41 +92,104 @@ const VRAM_SCOPE: Record<string, string> = {
 };
 
 /**
- * Samplers and schedulers the arm passes straight through to the child.
+ * Samplers and schedulers the arm passes straight through to ComfyUI.
  *
- * Spelled exactly as `sd-server -h` spells them, and a curated subset rather
- * than all twenty-one: the arm validates the *shape* of a name, so a build that
- * adds one needs no change there, but a console offering every sampler it can
- * compile is not a kindness.
+ * Spelled exactly as `comfy/samplers.py` spells them, and a curated subset
+ * rather than all forty: the arm validates the *shape* of a name, so a ComfyUI
+ * that adds one needs no change there, but a console offering every sampler
+ * that exists is not a kindness.
  *
- * The empty value means "say nothing", which is not the same as picking one:
- * upstream documents the sampler as model-specific and the scheduler as a
- * model default, and a console that always sent a value would be overriding a
- * choice the checkpoint shipped with.
+ * There is no "auto" here, unlike the sd.cpp console this replaced: ComfyUI's
+ * `KSampler` has no such value, so the first entry is what ComfyUI's own Qwen
+ * 2511 blueprint ships with.
  */
 const SAMPLERS = [
-  { value: 'euler', label: 'euler — what upstream uses for Qwen edit' },
-  { value: '', label: 'auto — the model’s own' },
-  { value: 'euler_a', label: 'euler_a — ancestral' },
-  { value: 'dpm++2m', label: 'dpm++2m' },
-  { value: 'dpm++2s_a', label: 'dpm++2s_a' },
+  { value: 'euler', label: 'euler — what ComfyUI’s Qwen 2511 blueprint uses' },
+  { value: 'euler_ancestral', label: 'euler_ancestral' },
+  { value: 'dpmpp_2m', label: 'dpmpp_2m' },
+  { value: 'dpmpp_2m_sde', label: 'dpmpp_2m_sde' },
+  { value: 'dpmpp_3m_sde', label: 'dpmpp_3m_sde' },
+  { value: 'dpmpp_sde', label: 'dpmpp_sde' },
   { value: 'heun', label: 'heun' },
+  { value: 'ddpm', label: 'ddpm' },
   { value: 'ipndm', label: 'ipndm' },
   { value: 'res_multistep', label: 'res_multistep' },
+  { value: 'gradient_estimation', label: 'gradient_estimation' },
+  { value: 'er_sde', label: 'er_sde' },
   { value: 'lcm', label: 'lcm — for distilled checkpoints' },
 ];
 
 const SCHEDULERS = [
-  { value: '', label: 'auto — the model’s own' },
-  { value: 'discrete', label: 'discrete (alias: normal)' },
+  { value: 'simple', label: 'simple — the blueprint’s' },
   { value: 'beta', label: 'beta' },
+  { value: 'normal', label: 'normal' },
   { value: 'karras', label: 'karras' },
   { value: 'exponential', label: 'exponential' },
   { value: 'sgm_uniform', label: 'sgm_uniform' },
-  { value: 'simple', label: 'simple' },
-  { value: 'smoothstep', label: 'smoothstep' },
+  { value: 'ddim_uniform', label: 'ddim_uniform' },
+  { value: 'linear_quadratic', label: 'linear_quadratic' },
   { value: 'kl_optimal', label: 'kl_optimal' },
-  { value: 'bong_tangent', label: 'bong_tangent' },
+];
+
+/**
+ * How the transformer is held on the card.
+ *
+ * A start parameter: the cast happens as the weights are read, so changing it
+ * is a different child process. The bf16 checkpoint is nineteen gigabytes
+ * against a sixteen gigabyte card, which is why fp8 is the default rather than
+ * the exception.
+ */
+const WEIGHT_DTYPES = [
+  { value: 'fp8_e4m3fn', label: 'fp8_e4m3fn — halves the transformer, fits the card' },
+  { value: 'fp8_e4m3fn_fast', label: 'fp8_e4m3fn_fast — also uses the card’s fp8 matmul' },
+  { value: 'fp8_e5m2', label: 'fp8_e5m2 — more range, less precision' },
+  { value: 'default', label: 'default — the checkpoint’s own dtype, streamed if it will not fit' },
+];
+
+const VRAM_MODES = [
+  { value: 'dynamic', label: 'dynamic — ComfyUI decides what to stream' },
+  { value: 'highvram', label: 'highvram — keep everything resident' },
+  { value: 'lowvram', label: 'lowvram — split the model aggressively' },
+  { value: 'novram', label: 'novram — when lowvram is not enough' },
+];
+
+/**
+ * Styles worth keeping, as the pair of prompts that produce them.
+ *
+ * Only the look: no subject, no pose, no framing. A preset that described a
+ * character would fight whatever is typed in the box below it, and the whole
+ * point of the split is that the style survives a change of subject.
+ */
+const STYLE_PRESETS: { name: string; style: string; negative: string }[] = [
+  {
+    name: '3D xianxia',
+    style: [
+      'semi-realistic 3D rendered xianxia illustration',
+      'cinematic character render, Chinese fantasy wuxia aesthetic',
+      'stylised anime proportions with physically based skin shading and subsurface scattering',
+      'strand-level hair detail with soft backlit rim light',
+      'porcelain pale complexion, delicate features',
+      'desaturated palette of ash grey and charcoal with deep crimson accents',
+      'low-key volumetric lighting, cool overcast key light, warm rim light',
+      'shallow depth of field, creamy bokeh',
+      'drifting snow and dust motes in the air',
+      'fine film grain, subtle chromatic aberration',
+      'detailed silk, embroidery and blackened metal materials',
+      'Unreal Engine 5 and Octane cinematic render, 8k, highly detailed',
+    ].join(', '),
+    negative: [
+      'photograph, real person, photorealistic skin pores',
+      'flat 2D cel shading, lineart, manga screentone, sketch, oil painting texture',
+      'western cartoon, chibi, low detail',
+      'blurry, out of focus, jpeg artifacts, lowres',
+      'oversaturated, neon colours, flat frontal lighting, blown highlights',
+      'plastic skin, waxy skin, doll-like, dead eyes, asymmetric eyes',
+      'bad anatomy, bad proportions, deformed hands, extra fingers, fused fingers, extra limbs',
+      'mutated, disfigured',
+      'watermark, signature, text, logo, username, border, frame, cropped',
+      'modern clothing',
+    ].join(', '),
+  },
 ];
 
 // By capability, not modality. Two image arms can be unable to run each
@@ -154,6 +230,25 @@ const modelName = computed(() => {
 });
 
 /**
+ * Whether the selected arm samples on a distilled turbo schedule.
+ *
+ * Read off the arm's own parameter schema rather than matched on its id: an
+ * arm that loads a turbo LoRA declares one, and that is the fact the controls
+ * below actually depend on. Such an arm runs unguided on a fixed sigma
+ * schedule, so guidance, the scheduler and the flow shift have nowhere to go.
+ */
+const isTurbo = computed(() => schemaProperty('turboLora') !== null);
+
+/**
+ * The pixel grid the selected model works in.
+ *
+ * Qwen-Image-Edit is 16 -- an 8x VAE with a 2x patch embed. Qwen-Image 2.1's
+ * latent is a sixteenth scale with a further factor of two, so it is 32, and
+ * asking it for 1040 is a job it refuses.
+ */
+const edgeMultiple = computed(() => (isTurbo.value ? SPATIAL_MULTIPLE : IMAGE_MULTIPLE));
+
+/**
  * Three different things, told apart: nothing to pick, something picked whose
  * model is known, and something picked that names no default model. Reading
  * the last as the first is how this line once claimed no arm existed while an
@@ -166,26 +261,33 @@ const armHint = computed(() => {
   return modelName.value ?? 'This arm declares no default diffusion model.';
 });
 
-// Start parameters: changing either restarts the arm, because both decide how
-// the weights are placed. The console says so rather than hiding it.
-const offloadToCpu = ref(true);
-const flashAttention = ref(true);
+// Start parameters: changing any of these restarts the arm, because all three
+// decide how the weights are placed. The console says so rather than hiding it.
+const weightDtype = ref('fp8_e4m3fn');
+const textEncoderOnCpu = ref(false);
+const vramMode = ref('dynamic');
 
 const prompt = ref('');
+// The style half. Kept apart from the subject only because the two change at
+// different rates; they are joined into one prompt before anything is sent,
+// and leaving this empty is how you write the whole prompt in one box.
+const stylePrompt = ref('');
 const negativePrompt = ref('');
 const aspect = ref<string>('1:1');
 const width = ref(1024);
 const height = ref(1024);
 // The distilled "rapid" merge that ships with this arm: four steps, unguided.
-// The stock Qwen-Image-Edit 2511 wants 20 steps at CFG 2.5 instead, which is
-// what the hint under Steps says.
+// The stock Qwen-Image-Edit 2511 wants 40 steps at CFG 4 instead, which is
+// what ComfyUI's own blueprint uses and what the hint under Steps says.
 const steps = ref(4);
 const cfgScale = ref(1);
-const sampler = ref('euler_a');
+const sampler = ref('euler_ancestral');
 const scheduler = ref('beta');
 const flowShift = ref(3);
 const seed = ref('');
 const batch = ref(1);
+/** Ask the arm to rewrite the prompt first. Only the turbo arm has a rewriter. */
+const enhancePrompt = ref(false);
 
 const referenceIds = ref<(string | null)[]>([null]);
 /** Which reference slot the picker is filling, or null when it is closed. */
@@ -223,7 +325,10 @@ const ratio = computed(() =>
 );
 
 const snap = (value: number): number =>
-  Math.max(MIN_EDGE, Math.min(MAX_EDGE, Math.round(value / IMAGE_MULTIPLE) * IMAGE_MULTIPLE));
+  Math.max(
+    MIN_EDGE,
+    Math.min(MAX_EDGE, Math.round(value / edgeMultiple.value) * edgeMultiple.value),
+  );
 
 /**
  * The two edges drive each other through the aspect.
@@ -274,6 +379,25 @@ watch(referenceRatio, (current) => {
   if (!current && aspect.value === REFERENCE_ASPECT) aspect.value = '1:1';
 });
 
+/**
+ * Switching arms brings that arm's own sampling settings with it.
+ *
+ * Only on a change of arm, which is a deliberate act -- the settings a
+ * distilled six-step student wants are not the ones a guided model wants, and
+ * carrying the old ones across is how you get four steps at CFG 1 on a model
+ * that needed twenty, and wonder why the image is mud. The frame is left
+ * alone: it is the thing people set first and mean.
+ */
+watch(isTurbo, (turbo, previous) => {
+  if (previous === undefined) return;
+  steps.value = turbo ? 6 : 4;
+  cfgScale.value = 1;
+  sampler.value = turbo ? 'euler' : 'euler_ancestral';
+  scheduler.value = turbo ? 'simple' : 'beta';
+  width.value = snap(width.value);
+  height.value = snap(height.value);
+});
+
 /** Both edges are already on the grid; this is what the arm will be sent. */
 const snapped = computed(() => ({ width: width.value, height: height.value }));
 
@@ -308,15 +432,18 @@ function removeReference(index: number): void {
 /** Puts a previous run back into the form, exactly as it was asked for. */
 function restoreFrom(meta: MediaMeta): void {
   prompt.value = meta.prompt ?? '';
+  stylePrompt.value = meta.stylePrompt ?? '';
   negativePrompt.value = meta.negativePrompt ?? '';
 
   const ids = meta.referenceIds ?? (meta.referenceId ? [meta.referenceId] : []);
   referenceIds.value = ids.length < MAX_REFERENCES ? [...ids, null] : [...ids];
 
-  const offload = meta.armParams?.['offloadToCpu'];
-  if (typeof offload === 'string') offloadToCpu.value = offload === 'true';
-  const attention = meta.armParams?.['flashAttention'];
-  if (typeof attention === 'string') flashAttention.value = attention === 'true';
+  const dtype = meta.armParams?.['weightDtype'];
+  if (typeof dtype === 'string') weightDtype.value = dtype;
+  const encoderDevice = meta.armParams?.['textEncoderDevice'];
+  if (typeof encoderDevice === 'string') textEncoderOnCpu.value = encoderDevice === 'cpu';
+  const mode = meta.armParams?.['vramMode'];
+  if (typeof mode === 'string') vramMode.value = mode;
 
   const settings = meta.settings;
   if (!isImageSettings(settings)) return;
@@ -376,9 +503,17 @@ const preview = ref<MediaItem | null>(null);
 const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: follow, stopWatching } =
   useJobTelemetry();
 
+/** What the model will be given: the two boxes as one prompt. */
+const mergedPrompt = computed(() => mergePrompt(prompt.value, stylePrompt.value));
+
 const canGenerate = computed(
-  () => prompt.value.trim().length > 0 && status.value === 'idle' && arm.value !== null,
+  () => mergedPrompt.value.length > 0 && status.value === 'idle' && arm.value !== null,
 );
+
+function applyPreset(preset: (typeof STYLE_PRESETS)[number]): void {
+  stylePrompt.value = preset.style;
+  negativePrompt.value = preset.negative;
+}
 
 async function generate(): Promise<void> {
   if (!canGenerate.value || !arm.value) return;
@@ -415,11 +550,14 @@ async function generate(): Promise<void> {
     prompt: prompt.value.trim(),
     settings,
     output: { width: snapped.value.width, height: snapped.value.height, count: batch.value },
+    ...(stylePrompt.value.trim() ? { stylePrompt: stylePrompt.value.trim() } : {}),
     ...(negativePrompt.value.trim() ? { negativePrompt: negativePrompt.value.trim() } : {}),
+    ...(enhancePrompt.value ? { enhancePrompt: true } : {}),
     ...(chosenIds.value.length > 0 ? { referenceIds: chosenIds.value } : {}),
     armParams: {
-      offloadToCpu: offloadToCpu.value ? 'true' : 'false',
-      flashAttention: flashAttention.value ? 'true' : 'false',
+      weightDtype: weightDtype.value,
+      textEncoderDevice: textEncoderOnCpu.value ? 'cpu' : 'default',
+      vramMode: vramMode.value,
     },
   };
 
@@ -464,7 +602,7 @@ async function generate(): Promise<void> {
               lazy
               :min="MIN_EDGE"
               :max="MAX_EDGE"
-              :step="IMAGE_MULTIPLE"
+              :step="edgeMultiple"
             />
           </UiField>
           <UiField label="Height" for="height">
@@ -474,7 +612,7 @@ async function generate(): Promise<void> {
               lazy
               :min="MIN_EDGE"
               :max="MAX_EDGE"
-              :step="IMAGE_MULTIPLE"
+              :step="edgeMultiple"
             />
           </UiField>
         </div>
@@ -483,7 +621,7 @@ async function generate(): Promise<void> {
         </p>
         <p class="text-xs text-slate-500">
           Either edge sets the other through the aspect; changing the aspect moves the height. Both land on
-          a multiple of {{ IMAGE_MULTIPLE }}, which is the model's own grid.
+          a multiple of {{ edgeMultiple }}, which is the model's own grid.
         </p>
         <p v-if="aspect === REFERENCE_ASPECT && references[0]" class="text-xs text-slate-500">
           Shaped to {{ references[0].name }} ({{ references[0].width }}&#215;{{ references[0].height }}).
@@ -492,53 +630,69 @@ async function generate(): Promise<void> {
 
       <div class="grid grid-cols-2 gap-3">
         <UiField label="Steps" for="steps">
-          <UiNumberInput id="steps" v-model="steps" :min="1" :max="100" />
+          <UiNumberInput id="steps" v-model="steps" :min="1" :max="isTurbo ? 32 : 100" />
         </UiField>
-        <UiField label="CFG scale" for="cfg">
+        <UiField v-if="!isTurbo" label="CFG scale" for="cfg">
           <UiNumberInput id="cfg" v-model="cfgScale" :min="0" :max="30" :step="0.1" />
         </UiField>
+        <UiField v-else label="Seed" for="seed-turbo">
+          <UiInput id="seed-turbo" v-model="seed" placeholder="empty = random" />
+        </UiField>
       </div>
-      <p class="-mt-3 text-xs text-slate-500">
+      <p v-if="isTurbo" class="-mt-3 text-xs text-slate-500">
+        Six steps is the schedule this LoRA was distilled for, and it samples unguided — there is no CFG,
+        no scheduler and no flow shift to set, and the negative prompt does nothing. Extra steps subdivide
+        the first, highest-noise part of the schedule, which is where composition is decided.
+      </p>
+      <p v-else class="-mt-3 text-xs text-slate-500">
         Four steps at CFG 1 is the distilled Rapid merge: it is trained to finish in that many and is
-        unguided, so the negative prompt does nothing. Stock Qwen-Image-Edit 2511 wants 20 steps at CFG 2.5.
+        unguided, so the negative prompt does nothing. Stock Qwen-Image-Edit 2511 wants 40 steps at CFG 4,
+        which is what ComfyUI's own blueprint ships with.
       </p>
 
-      <div class="grid grid-cols-2 gap-3">
-        <UiField label="Sampler" for="sampler">
-          <UiSelect id="sampler" v-model="sampler" :options="SAMPLERS" />
-        </UiField>
-        <UiField label="Scheduler" for="scheduler">
-          <UiSelect id="scheduler" v-model="scheduler" :options="SCHEDULERS" />
-        </UiField>
-      </div>
+      <template v-if="!isTurbo">
+        <div class="grid grid-cols-2 gap-3">
+          <UiField label="Sampler" for="sampler">
+            <UiSelect id="sampler" v-model="sampler" :options="SAMPLERS" />
+          </UiField>
+          <UiField label="Scheduler" for="scheduler">
+            <UiSelect id="scheduler" v-model="scheduler" :options="SCHEDULERS" />
+          </UiField>
+        </div>
 
-      <div class="grid grid-cols-2 gap-3">
-        <UiField label="Flow shift" for="flow">
-          <UiNumberInput id="flow" v-model="flowShift" :min="0" :max="10" :step="0.1" />
-        </UiField>
-        <UiField label="Seed" for="seed">
-          <UiInput id="seed" v-model="seed" placeholder="empty = random" />
-        </UiField>
-      </div>
+        <div class="grid grid-cols-2 gap-3">
+          <UiField label="Flow shift" for="flow">
+            <UiNumberInput id="flow" v-model="flowShift" :min="0" :max="10" :step="0.1" />
+          </UiField>
+          <UiField label="Seed" for="seed">
+            <UiInput id="seed" v-model="seed" placeholder="empty = random" />
+          </UiField>
+        </div>
+      </template>
       <p class="-mt-3 text-xs text-slate-500">
         A batch increments the seed per image, and the library records the one each file actually used.
       </p>
 
       <fieldset class="space-y-2 border-t border-white/10 pt-4">
         <legend class="text-sm font-medium text-slate-200">How the weights are placed</legend>
+        <UiField label="Transformer precision" for="dtype">
+          <UiSelect id="dtype" v-model="weightDtype" :options="WEIGHT_DTYPES" />
+        </UiField>
+        <UiField label="VRAM strategy" for="vram-mode">
+          <UiSelect id="vram-mode" v-model="vramMode" :options="VRAM_MODES" />
+        </UiField>
         <UiCheckbox
-          v-model="offloadToCpu"
-          label="Offload to CPU"
-          hint="Keeps weights in host RAM and moves them across as they are needed. On a 16 GiB card this is what makes the transformer and the text encoder fit together at all."
-        />
-        <UiCheckbox
-          v-model="flashAttention"
-          label="Flash attention"
-          hint="Cuts the attention activation peak. Upstream's own Qwen-Image-Edit examples all enable it."
+          v-model="textEncoderOnCpu"
+          label="Keep the text encoder on the CPU"
+          :hint="
+            isTurbo
+              ? 'Qwen3-VL is most of the card it would otherwise share with the transformer. On the CPU it also makes the prompt enhancer far slower, because the enhancer is that same model generating text.'
+              : 'Qwen2.5-VL is fifteen gigabytes of the card it would otherwise share with the transformer. On the CPU the prompt encode is slower, and on a 16 GiB card it is what stops the two of them fighting.'
+          "
         />
         <p class="text-xs text-slate-500">
-          Both are start parameters: changing either restarts the arm, because placement is decided when the
-          weights are read.
+          All three are start parameters: changing any of them restarts ComfyUI, because placement is
+          decided when the weights are read.
         </p>
       </fieldset>
     </aside>
@@ -572,13 +726,13 @@ async function generate(): Promise<void> {
             </div>
           </div>
           <template #hint>
-            Up to {{ MAX_REFERENCES }}. Qwen-Image-Edit composes them into one scene rather than treating
-            them as alternatives, and the first one decides the frame's shape. With none, this is plain
-            text-to-image.
+            Up to {{ MAX_REFERENCES }} — ComfyUI's Qwen edit encoder takes image1 through image3. They are
+            composed into one scene rather than treated as alternatives, and the first one decides the
+            frame's shape. With none, this is plain text-to-image.
           </template>
         </UiField>
 
-        <UiField label="Prompt" for="prompt" required>
+        <UiField label="Prompt" for="prompt">
           <UiTextarea
             id="prompt"
             v-model="prompt"
@@ -589,6 +743,44 @@ async function generate(): Promise<void> {
             An edit model reads instructions: say what should change and what should stay.
           </template>
         </UiField>
+
+        <UiField label="Style" for="style">
+          <UiTextarea
+            id="style"
+            v-model="stylePrompt"
+            :rows="3"
+            placeholder="How it should look — medium, lighting, palette, render"
+          />
+          <div v-if="STYLE_PRESETS.length" class="mt-2 flex flex-wrap items-center gap-2">
+            <span class="text-xs text-slate-500">Presets:</span>
+            <UiButton
+              v-for="preset in STYLE_PRESETS"
+              :key="preset.name"
+              size="sm"
+              :data-testid="`style-preset-${preset.name}`"
+              @click="applyPreset(preset)"
+            >
+              {{ preset.name }}
+            </UiButton>
+          </div>
+          <template #hint>
+            Split from the prompt for editing only — the two are joined with a comma and sent as one, so
+            writing everything above and leaving this empty gives exactly the same result. A preset also
+            fills the negative prompt.
+          </template>
+        </UiField>
+
+        <details v-if="stylePrompt.trim() && prompt.trim()" class="text-xs text-slate-500">
+          <summary class="cursor-pointer hover:text-slate-300">What the model will be given</summary>
+          <p class="mt-2 rounded-lg bg-black/30 p-3 font-mono leading-relaxed">{{ mergedPrompt }}</p>
+        </details>
+
+        <UiCheckbox
+          v-if="isTurbo"
+          v-model="enhancePrompt"
+          label="Rewrite the prompt first"
+          hint="Runs Qwen3-VL — the text encoder this arm already has loaded — over the prompt with the model's own rewriter instructions, then samples what it wrote. Once per job, not once per image. The library records both what you typed and what reached the model."
+        />
 
         <UiField label="Batch">
           <div class="flex flex-wrap items-center gap-2">
@@ -605,7 +797,9 @@ async function generate(): Promise<void> {
             <div class="w-24"><UiNumberInput v-model="batch" :min="1" :max="MAX_BATCH" /></div>
           </div>
           <template #hint>
-            One load, {{ batch }} image{{ batch === 1 ? '' : 's' }}, each filed separately with its own seed.
+            One load, {{ batch }} image{{ batch === 1 ? '' : 's' }}, each filed separately with its own
+            seed. A batch costs no extra memory — it is one ComfyUI prompt per image — so the only price
+            of a big one is that the card is busy until the last file is written.
           </template>
         </UiField>
 
@@ -690,9 +884,9 @@ async function generate(): Promise<void> {
             between the two meters. A job's own steps appear here once one is submitted.
           </p>
           <p class="text-xs">
-            There is no torch in this arm to ask — the weights live in a child process written in C++ — so
-            its meter is nvidia-smi's. On a GeForce card under Windows that means a whole-card figure, and
-            the two lines will sit on top of each other: the driver will not attribute memory per process.
+            There is no torch in this arm to ask — the weights live in a ComfyUI child process — so its
+            meter is nvidia-smi's. On a GeForce card under Windows that means a whole-card figure, and the
+            two lines will sit on top of each other: the driver will not attribute memory per process.
           </p>
         </div>
       </aside>

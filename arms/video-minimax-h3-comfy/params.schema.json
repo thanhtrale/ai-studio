@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MiniMax-H3 + Turbo LoRA (ComfyUI) start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "diffusionModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The H3 Omni-Transformer, loaded by ComfyUI's UNETLoader. This default is the full, un-pruned fl2va checkpoint: the pruned variants drop the AdaLN branches, and a LoRA trained against the full base only reaches them through a runtime re-injection the node has to guess at. fl2va is the checkpoint that serves text-to-video and first/last-frame video; ref2va is a different set of weights.",
+      "default": "models/minimax-h3/diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors"
+    },
+    "textEncoder": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Qwen3-VL 32B, whose 50th-layer hidden states are H3's conditioning. The full weights, not a pruned encoder: H3 adds its own special tokens and the tokenizer configuration that comes with the ComfyUI repack is the one the model was trained against.",
+      "default": "models/minimax-h3/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+    },
+    "videoVae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "H3-VisualVAE: 16x spatial, 4x temporal, 24 latent channels. Also the VAE that encodes a first or last frame into the keyframe latent.",
+      "default": "models/minimax-h3/vae/minimax_h3_video_vae_fp16.safetensors"
+    },
+    "audioVae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "H3-AudioVAE. The clip's stereo track is denoised jointly with the picture and decoded here, which is why there is a second VAE at all.",
+      "default": "models/minimax-h3/vae/minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "turboLora": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The MiniMax-H3 Turbo LoRA. This default is the v4 step-600 EMA file for a full base -- the pruned/curve-form conversions are for a pruned checkpoint and will not reproduce it. Four to eight steps instead of twenty; this arm exists for that schedule.",
+      "default": "models/minimax-h3/loras/minimax_h3_turbo_v4_step600_ema.safetensors"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's keyframe images are confined to. ComfyUI is given this as its own input directory, so a reference is named relative to it and nothing outside it can be read.",
+      "default": "inputs"
+    },
+    "scratchDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where ComfyUI keeps its own output, temp and user files. Nothing here is the library's; finished clips are moved out of it.",
+      "default": "cache/comfy-h3"
+    },
+    "weightDtype": {
+      "type": "string",
+      "enum": ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+      "description": "How the transformer is cast as it is read. default is correct for the int8_convrot checkpoint, which carries its own quantisation -- casting that to fp8 would quantise it twice. Only a bf16 checkpoint has anything to gain here.",
+      "default": "default"
+    },
+    "textEncoderDevice": {
+      "type": "string",
+      "enum": ["default", "cpu"],
+      "description": "cpu keeps Qwen3-VL 32B off the card. On a 16 GiB card that is most of the reason a clip fits at all, at the cost of a slower prompt encode once per job.",
+      "default": "default"
+    },
+    "loraMode": {
+      "type": "string",
+      "enum": ["bypass", "merge"],
+      "description": "bypass applies the LoRA at run time as Wx + BAx, which is what the adapter was measured on. merge folds it into the weights: lowest peak VRAM, and softer on a quantised base because the update is partly rounded away.",
+      "default": "bypass"
+    },
+    "vramMode": {
+      "type": "string",
+      "enum": ["dynamic", "highvram", "lowvram", "novram"],
+      "description": "dynamic is ComfyUI's own memory manager, which streams whatever will not fit -- and on a 16 GiB card against a 33B transformer, that is most of it. The rest pin its behaviour.",
+      "default": "dynamic"
+    },
+    "attention": {
+      "type": "string",
+      "enum": ["pytorch", "sage", "flash", "split", "quad"],
+      "description": "Attention backend. sage roughly halves the sampling time on this model and needs its own wheel in this arm's venv.",
+      "default": "pytorch"
+    },
+    "reserveVram": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 8,
+      "description": "GiB left to the desktop compositor. Too little and Windows starts evicting the model behind ComfyUI's back.",
+      "default": 0.8
+    },
+    "cacheMode": {
+      "type": "string",
+      "enum": ["ram", "classic", "lru", "none"],
+      "description": "What ComfyUI keeps between prompts. ram is its default; none re-runs every node each time, which throws away the cached prompt encode a batch of clips depends on.",
+      "default": "ram"
+    },
+    "extraArgs": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Extra ComfyUI command line flags, split on whitespace and passed through verbatim.",
+      "default": ""
+    }
+  }
+}

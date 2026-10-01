@@ -59,6 +59,68 @@ export interface GenerateResponse {
 }
 
 /**
+ * The video console's request to a ComfyUI video arm.
+ *
+ * Separate from `GenerateRequest` rather than a widening of it, because the two
+ * arms behind this console are not the same shape: the fixed-schedule diffusers
+ * arm has upsamplers, an enhancer and exactly one clip per request, and the
+ * distilled ComfyUI arm has a step count, a scheduler, two keyframes and a
+ * batch. What they share -- a browser-chosen job id, references by media id,
+ * arm start parameters -- is spelled the same way on purpose, and this one is
+ * spelled the same way as `ImageGenerateRequest` for the same reason.
+ */
+export interface VideoGenerateRequest {
+  jobId: string;
+  prompt: string;
+  /** The style half of the prompt, joined onto `prompt` before it is sent. */
+  stylePrompt?: string;
+  negativePrompt?: string;
+  /**
+   * Media ids under the arm input root, positional: the first is the clip's
+   * first frame and the second its last. Not alternatives, and not a set --
+   * sending one image to end on means sending it in the second slot.
+   */
+  referenceIds?: string[];
+  /** A folder under `outputs/` to file this run in, instead of today's date. */
+  collection?: string;
+  settings: VideoJobSettings;
+  output: OutputInfo;
+  armParams?: Record<string, unknown>;
+}
+
+/** One clip out of a batch, as the arm reports it. */
+export interface ArmVideoOut {
+  out_path: string;
+  out_bytes: number;
+  index: number;
+  seed: number;
+}
+
+/** The ComfyUI video arm's own report, verbatim: its keys are the arm's. */
+export interface ArmVideoReport {
+  seconds_total: number;
+  steps: number;
+  seed: number;
+  batch: number;
+  width: number;
+  height: number;
+  num_frames: number;
+  frame_rate: number;
+  videos: ArmVideoOut[];
+  peak_vram_gib: number;
+  /** What `peak_vram_gib` measured. See `ArmImageReport` for why it travels. */
+  vram_scope: 'process' | 'card' | 'unavailable';
+  stages: { name: string; seconds: number }[];
+  prompt_used?: string | null;
+}
+
+export interface VideoGenerateResponse {
+  /** One entry per file written, in the order the arm produced them. */
+  media: MediaItem[];
+  report: ArmVideoReport;
+}
+
+/**
  * The image console's request.
  *
  * Separate from the video one rather than a modality flag on it, because the
@@ -70,16 +132,56 @@ export interface GenerateResponse {
 export interface ImageGenerateRequest {
   jobId: string;
   prompt: string;
+  /**
+   * The style half of the prompt, joined onto `prompt` before it is sent.
+   *
+   * Two boxes rather than one because the two halves change at different
+   * rates: a style is settled once and reused across a session, and a subject
+   * is rewritten every run. Splitting them is a convenience of the form only —
+   * the model is given one prompt, and anyone who prefers to write it as one
+   * can leave this empty.
+   */
+  stylePrompt?: string;
   negativePrompt?: string;
+  /**
+   * Ask the arm to rewrite the prompt before it samples.
+   *
+   * Only some arms have a rewriter; one that does not ignores this, which is
+   * why it is a plain flag rather than something the console has to negotiate.
+   * What actually reached the model comes back as the report's `prompt_used`.
+   */
+  enhancePrompt?: boolean;
   /**
    * Media ids under the arm input root. Plural because Qwen-Image-Edit takes
    * several: the references are composed into one scene rather than being
    * alternatives to choose between.
    */
   referenceIds?: string[];
+  /**
+   * A folder under `outputs/` to file this run in, instead of today's date.
+   *
+   * A long scripted run is one body of work, and splitting it across date
+   * folders -- or mixing it into whatever else was made that day -- is what
+   * makes it unreadable afterwards.
+   */
+  collection?: string;
   settings: ImageJobSettings;
   output: OutputInfo;
   armParams?: Record<string, unknown>;
+}
+
+/**
+ * The one prompt the model is given, out of the console's two boxes.
+ *
+ * Subject first, style after: an empty half must leave no trace, and joining
+ * on a comma is what a reader of either half would have typed had they written
+ * the whole thing in one box.
+ */
+export function mergePrompt(subject: string, style?: string): string {
+  return [subject, style]
+    .map((part) => (part ?? '').trim().replace(/[,\s]+$/, ''))
+    .filter((part) => part.length > 0)
+    .join(', ');
 }
 
 /** One file out of a batch, as the arm reports it. */

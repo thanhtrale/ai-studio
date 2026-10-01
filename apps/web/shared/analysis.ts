@@ -126,6 +126,23 @@ export interface NormalisedDesign {
   fileKey: string;
   nodeId: string;
   name?: string;
+  /**
+   * Which view of the block this frame is: `Desktop`, `Mobile 390`, …
+   *
+   * The frame's own name where it has one, because that is what the designer
+   * called it and what the person reading the report will recognise. Made
+   * unique across one analysis by the pipeline, since two frames may honestly
+   * share a name.
+   */
+  label: string;
+  /**
+   * The frame's width.
+   *
+   * The one number that actually distinguishes the viewports, and the key the
+   * views are ordered by -- widest first, because the widest frame shows the
+   * most and makes the best primary reading.
+   */
+  width?: number;
   digest: string;
   /**
    * Every node id the digest mentions.
@@ -163,6 +180,18 @@ export interface DesignElement {
   repeated: boolean;
   /** The variant name, when the element belongs to a component variant. */
   variant?: string;
+  /**
+   * How the element differs between viewports, when several were read.
+   *
+   * "hidden below 768", "stacks under the image on mobile". Absent when only
+   * one frame was read, or when the element is the same in all of them.
+   *
+   * This is a reading of the design, so it is a requirement like any other --
+   * and where the ticket never mentions it, a gap. It is deliberately prose
+   * rather than a structure: the shapes responsive behaviour takes are not
+   * enumerable, and a half-right enum would lose the half it could not name.
+   */
+  responsive?: string;
 }
 
 /** One thing the ticket asserts, as pass 2 extracted it. */
@@ -290,8 +319,16 @@ export interface AnalysisRequest {
   analysisId: string;
   /** The block being specified, e.g. `featured-story-card`. */
   blockName: string;
-  /** A Figma link carrying a file key and a node id. */
-  designUrl: string;
+  /**
+   * The Figma links, as they were typed.
+   *
+   * Free text rather than a parsed list: the links are extracted here, by the
+   * same code the console used to preview them, so there is no way for the two
+   * to disagree about which links a paste contained. One link is the ordinary
+   * case; several are the same block at several viewports, and must be to the
+   * same file.
+   */
+  designLinks: string;
   /** The ticket, already normalised by the ticket route. */
   ticket: NormalisedTicket;
   /** Which arm runs the passes. Any arm declaring `text.generate`. */
@@ -310,7 +347,8 @@ export interface AnalysisRecord {
   endedAt?: string;
   /** Why it failed, when it did. */
   detail?: string;
-  design?: Pick<NormalisedDesign, 'adapter' | 'fileKey' | 'nodeId' | 'name'>;
+  /** One per frame read, widest first. */
+  designs?: Pick<NormalisedDesign, 'adapter' | 'fileKey' | 'nodeId' | 'name' | 'label' | 'width'>[];
   ticket?: Pick<NormalisedTicket, 'format' | 'key' | 'summary'>;
   counts?: {
     requirements: number;
@@ -328,4 +366,21 @@ export interface AnalysisResult {
   model: UeBlockModel;
   /** The readable consolidation, rendered from the above rather than generated. */
   markdown: string;
+  /**
+   * The gaps alone, as questions to put to a person.
+   *
+   * Not a duplicate of the requirement document's gap section but a different
+   * use of it: that one is read top to bottom to learn what the block is, this
+   * one is worked through an item at a time to close what nobody decided.
+   */
+  gapsMarkdown: string;
+  /**
+   * The proposed model, explained to whoever has to author with it.
+   *
+   * `_<block>.json` is for a developer. This says what each field asks for,
+   * why an image has two boxes, which fields are not content at all -- and
+   * what the checks found wrong with the proposal, because the fourth pass is
+   * the least reliable of the four and its failures parse cleanly.
+   */
+  authoringMarkdown: string;
 }

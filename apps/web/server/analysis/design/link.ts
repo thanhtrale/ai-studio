@@ -1,89 +1,47 @@
 /**
- * A Figma link, reduced to the two things that identify a design.
+ * Figma links, as a route has to deal with them.
  *
- * A whole file is not a block, and reading one would be neither affordable nor
- * meaningful, so a reference without a node is refused rather than widened to
- * the file. The node id is the awkward part: a browser URL writes it with a
- * hyphen (`node-id=123-456`) while every API and MCP tool wants a colon
- * (`123:456`), and older links percent-encode the colon. All three forms are
- * the same node and all three are accepted.
+ * The rules themselves live in `#shared/figma-link`, because the console
+ * applies the same ones to tell a person their link is wrong before they spend
+ * four minutes finding out. What is here is only the translation from a result
+ * into the refusal a route owes its caller.
+ *
+ * Throwing rather than returning is the right shape at this layer: every caller
+ * is a route that has to refuse the request with a reason, and the reasons --
+ * not Figma at all, no node in the link, two different files -- differ in ways
+ * a null would flatten.
  */
+
+import type { DesignReference } from '#shared/figma-link';
+import { figmaLink, readFigmaLink, readFigmaLinks } from '#shared/figma-link';
 
 import { RelayError } from '../../utils/supervisor';
 
-export interface DesignReference {
-  fileKey: string;
-  /** Canonical form, with a colon -- which is what the tools take. */
-  nodeId: string;
-  /** The file's name as the URL spells it, when it carries one. */
-  fileName?: string;
+export type { DesignReference };
+export { figmaLink };
+
+/** One link, where exactly one is meant. */
+export function parseFigmaLink(input: unknown): DesignReference {
+  if (typeof input !== 'string') throw new RelayError('invalid_request', 'a Figma link is required');
+  const reading = readFigmaLink(input);
+  if (!reading.ok) throw new RelayError('invalid_request', reading.reason);
+  return reading.reference;
 }
-
-const FIGMA_HOSTS = new Set(['figma.com', 'www.figma.com']);
-
-/** The path segments Figma puts a file key behind. `board` is FigJam. */
-const FILE_SEGMENTS = new Set(['design', 'file', 'proto', 'board', 'slides']);
-
-const FILE_KEY = /^[A-Za-z0-9]{10,64}$/;
-const NODE_ID = /^\d+[-:]\d+$/;
 
 /**
- * Parses a Figma design link.
+ * Every link in a blob of text, which is how the console sends them.
  *
- * Throws rather than returning null: every caller is a route that has to refuse
- * the request with a reason, and the reason differs -- not Figma at all, no
- * node in it, a key that is not a key -- in ways a null would flatten.
+ * A single problem is reported as itself; several are joined, because a person
+ * who pasted three links and got two of them wrong should not have to submit
+ * three times to learn that.
  */
-export function parseFigmaLink(input: unknown): DesignReference {
-  if (typeof input !== 'string' || !input.trim()) {
-    throw new RelayError('invalid_request', 'a Figma link is required');
+export function parseFigmaLinks(input: unknown): DesignReference[] {
+  const { references, problems } = readFigmaLinks(input);
+  if (problems.length > 0) {
+    throw new RelayError('invalid_request', problems.join('; and '));
   }
-
-  let url: URL;
-  try {
-    url = new URL(input.trim());
-  } catch {
-    throw new RelayError('invalid_request', `"${input}" is not a URL`);
+  if (references.length === 0) {
+    throw new RelayError('invalid_request', 'at least one Figma link is required');
   }
-
-  if (!FIGMA_HOSTS.has(url.hostname.toLowerCase())) {
-    throw new RelayError('invalid_request', `${url.hostname} is not Figma`);
-  }
-
-  const segments = url.pathname.split('/').filter(Boolean);
-  const at = segments.findIndex((segment) => FILE_SEGMENTS.has(segment.toLowerCase()));
-  const fileKey = at === -1 ? undefined : segments[at + 1];
-
-  if (!fileKey || !FILE_KEY.test(fileKey)) {
-    throw new RelayError(
-      'invalid_request',
-      'that Figma link carries no file key -- copy a link to a frame rather than to a project',
-    );
-  }
-
-  const raw = url.searchParams.get('node-id') ?? url.searchParams.get('node_id');
-  if (!raw) {
-    throw new RelayError(
-      'invalid_request',
-      'that Figma link names no node -- select the block’s frame and copy a link to it, ' +
-        'because a whole file is not a block',
-    );
-  }
-
-  // `new URL` has already decoded `%3A`; the hyphen form has not been touched.
-  const nodeId = raw.replace('-', ':');
-  if (!NODE_ID.test(nodeId)) {
-    throw new RelayError('invalid_request', `"${raw}" is not a Figma node id`);
-  }
-
-  const reference: DesignReference = { fileKey, nodeId };
-  const fileName = segments[at + 2];
-  if (fileName) reference.fileName = decodeURIComponent(fileName).replace(/-/g, ' ');
-  return reference;
-}
-
-/** The canonical link for a reference, for a record that has to point back. */
-export function figmaLink(reference: DesignReference): string {
-  const name = reference.fileName ? encodeURIComponent(reference.fileName.replace(/ /g, '-')) : 'file';
-  return `https://www.figma.com/design/${reference.fileKey}/${name}?node-id=${reference.nodeId.replace(':', '-')}`;
+  return references;
 }

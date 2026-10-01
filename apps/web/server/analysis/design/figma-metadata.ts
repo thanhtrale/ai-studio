@@ -70,6 +70,33 @@ function hasImageFill(node: MarkupElement): boolean | undefined {
   return undefined;
 }
 
+/** A Figma node id, which is what tells a component's id from its name. */
+const NODE_ID = /^\d+:\d+$/;
+
+/**
+ * The main component's node id, for an instance.
+ *
+ * This is what the Inspect panel's "go to main component" arrow follows, and it
+ * is a better identity for a component than its name: an instance can be
+ * renamed in place, and two of them renamed differently would otherwise be
+ * counted as two components. The attribute is read from a list of spellings
+ * because the tool's output is not pinned by any contract here, and the value
+ * is only accepted when it actually looks like a node id -- several of these
+ * names carry the component's *name* in some versions.
+ */
+function componentIdOf(node: MarkupElement): string | undefined {
+  const value = attr(
+    node,
+    'componentid',
+    'maincomponentid',
+    'main-component-id',
+    'component-id',
+    'maincomponent',
+    'component',
+  );
+  return value !== undefined && NODE_ID.test(value) ? value : undefined;
+}
+
 /** The element's tag is the type unless an attribute says otherwise. */
 function typeOf(node: MarkupElement): string {
   return (attr(node, 'type', 'nodetype') ?? node.name).toUpperCase();
@@ -105,8 +132,11 @@ function convert(node: MarkupElement): DesignNode | null {
   const text = ownText(node);
   if (text !== undefined) design.text = text;
 
-  const component = attr(node, 'componentname', 'component', 'mainComponent');
-  if (component !== undefined) design.component = component;
+  const component = attr(node, 'componentname', 'component', 'maincomponent');
+  // The same attribute carries a name in some versions and an id in others.
+  if (component !== undefined && !NODE_ID.test(component)) design.component = component;
+  const componentId = componentIdOf(node);
+  if (componentId !== undefined) design.componentId = componentId;
   const variant = attr(node, 'variant', 'variantproperties', 'variants');
   if (variant !== undefined) design.variant = variant;
 

@@ -18,14 +18,15 @@ import type {
 } from '#shared/analysis';
 
 import type { DesignSource } from '../design/source';
-import { describeDigest } from '../design/digest';
+import { describeDigest, shareDigestBudget } from '../design/digest';
 import { DesignSourceError } from '../design/errors';
 import type { DesignReference } from '../design/link';
 import type { AnalysisRun } from '../registry';
-import { DESIGN_FILE, GAPS_FILE, REQUIREMENTS_FILE, TICKET_FILE, writeArtifact, writeJson, writeRecord } from '../store';
+import { AUTHORING_FILE, DESIGN_FILE, GAPS_FILE, GAPS_MD_FILE, REQUIREMENTS_FILE, TICKET_FILE, writeArtifact, writeJson, writeRecord } from '../store';
 import { checkClaims, checkElements, checkEvidence, evidenceSets } from './evidence';
 import { contentModelPass, designInventoryPass, reconcilePass, ticketClaimsPass } from './passes';
-import { renderRequirements } from './render';
+import { renderAuthoringGuide } from './authoring';
+import { renderGaps, renderRequirements } from './render';
 import type { ArmCaller, PassResult } from './runner';
 import { PassError, runPass } from './runner';
 
@@ -35,7 +36,15 @@ export interface AnalyseOptions {
   blockName: string;
   armId: string;
   armParams?: Record<string, unknown>;
-  reference: DesignReference;
+  /**
+   * The frames to read, in the order they were given.
+   *
+   * Several of them are one block drawn at several viewports. The first is the
+   * primary view -- it is the one Figma's code guess and the rendering are
+   * taken for, and the one the report leads with -- so the console asks for the
+   * widest first rather than reordering behind the person's back.
+   */
+  references: readonly DesignReference[];
   ticket: NormalisedTicket;
   design: DesignSource;
   caller: ArmCaller;
@@ -52,6 +61,47 @@ export function modelFileName(blockName: string): string {
 
 function countNote(label: string, count: number): string {
   return `${count} ${label}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Gives every view a label no other view in this run has.
+ *
+ * Two frames may honestly be called the same thing -- a designer naming both
+ * breakpoints "Card" is not a mistake -- and nothing cites a label, so this is
+ * purely so that a person reading the report can tell which reading came from
+ * which frame. An unnamed frame falls back to its position.
+ */
+function labelViews(designs: readonly NormalisedDesign[]): void {
+  const used = new Map<string, number>();
+  designs.forEach((design, at) => {
+    const base = design.name?.trim() || `view ${at + 1}`;
+    const seen = used.get(base) ?? 0;
+    used.set(base, seen + 1);
+    design.label = seen === 0 ? base : `${base} (${seen + 1})`;
+  });
+}
+
+/** The one-line qualifier the timeline shows once every frame has been read. */
+function describeViews(designs: readonly NormalisedDesign[]): string {
+  const first = designs[0];
+  if (designs.length === 1 && first) {
+    return describeDigest({
+      digest: first.digest,
+      nodeIds: first.nodeIds,
+      droppedNodes: first.droppedNodes,
+      ...(first.truncatedAtDepth === undefined ? {} : { truncatedAtDepth: first.truncatedAtDepth }),
+    });
+  }
+
+  const nodes = designs.reduce((total, design) => total + design.nodeIds.length, 0);
+  const dropped = designs.reduce((total, design) => total + design.droppedNodes, 0);
+  return [
+    countNote('view', designs.length),
+    countNote('node', nodes),
+    dropped > 0 ? `${dropped} dropped` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> {
@@ -77,29 +127,46 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
     throw error;
   };
 
-  // --- The design -----------------------------------------------------------
+  // --- The design, at every viewport it was given ---------------------------
 
   run.start('design');
-  let design: NormalisedDesign;
+  const designs: NormalisedDesign[] = [];
   try {
-    const read = await options.design.read(options.reference, {
-      ...(options.armReadsImages ? { wantRender: true } : {}),
-    });
-    design = read.design;
+    const views = options.references.length;
+    // One budget, shared. Reading a block at three widths is not a reason to
+    // spend three times the context on it -- the three trees are near-identical
+    // and it is the differences between them that are worth the room.
+    const digest = shareDigestBudget(views);
 
-    if (read.render) {
-      await writeArtifact(storageDir, analysisId, 'design.png', read.render.bytes);
-      design.renderId = 'design.png';
+    for (const [at, reference] of options.references.entries()) {
+      // A frame is a round trip to another application, so a run that reads
+      // three of them owes the person watching some sign of which one it is on.
+      if (views > 1) run.describe('design', `frame ${at + 1} of ${views}…`);
+
+      const read = await options.design.read(reference, {
+        // Both of these are taken once, for the primary view. The rendering is
+        // seconds and VRAM; Figma's code guess is six thousand characters that
+        // carry no citable id. Neither says anything about the narrower frames
+        // that the first one has not already said.
+        ...(options.armReadsImages && at === 0 ? { wantRender: true } : {}),
+        wantInterpretation: at === 0,
+        digest,
+      });
+
+      if (read.render) {
+        await writeArtifact(storageDir, analysisId, 'design.png', read.render.bytes);
+        read.design.renderId = 'design.png';
+      }
+      if (read.degraded.length > 0) {
+        run.note('design', read.degraded.map((entry) => `${read.design.label}: ${entry}`).join('\n'));
+      }
+
+      designs.push(read.design);
     }
 
-    await writeJson(storageDir, analysisId, DESIGN_FILE, design);
-    run.describe('design', describeDigest({
-      digest: design.digest,
-      nodeIds: design.nodeIds,
-      droppedNodes: design.droppedNodes,
-      ...(design.truncatedAtDepth === undefined ? {} : { truncatedAtDepth: design.truncatedAtDepth }),
-    }));
-    if (read.degraded.length > 0) run.note('design', read.degraded.join('\n'));
+    labelViews(designs);
+    await writeJson(storageDir, analysisId, DESIGN_FILE, designs);
+    run.describe('design', describeViews(designs));
     run.done('design');
   } catch (error) {
     // A design-source failure keeps its own reason all the way here, because
@@ -108,12 +175,14 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
     return fail('design', error instanceof DesignSourceError ? error : error);
   }
 
-  record.design = {
+  record.designs = designs.map((design) => ({
     adapter: design.adapter,
     fileKey: design.fileKey,
     nodeId: design.nodeId,
+    label: design.label,
     ...(design.name ? { name: design.name } : {}),
-  };
+    ...(design.width === undefined ? {} : { width: design.width }),
+  }));
 
   // --- The ticket -----------------------------------------------------------
 
@@ -142,10 +211,19 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
   // Ids the sources actually produced. Comments are citable too, under the
   // `c1`, `c2` names the prompt labels them with -- the same shape as a
   // passage id, and for the same reason: short enough to copy exactly.
-  const sets = evidenceSets(design.nodeIds, [
-    ...ticket.passages.map((passage) => passage.id),
-    ...ticket.comments.map((_comment, at) => `c${at + 1}`),
-  ]);
+  //
+  // Every view's ids go into one set, so an element seen in the design may be
+  // cited from whichever frame showed it best. That union is sound only because
+  // the links were required to be to a single Figma file: node ids are unique
+  // within a file and mean nothing across two, so a set spanning files could
+  // verify a citation against a frame it never came from.
+  const sets = evidenceSets(
+    designs.flatMap((design) => design.nodeIds),
+    [
+      ...ticket.passages.map((passage) => passage.id),
+      ...ticket.comments.map((_comment, at) => `c${at + 1}`),
+    ],
+  );
 
   const pass = async <T>(
     definition: Parameters<typeof runPass<T>>[0],
@@ -177,7 +255,7 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
 
   // --- Pass 1 and pass 2: one source each, in isolation ---------------------
 
-  const inventory = await pass(designInventoryPass(design, blockName), 'pass1');
+  const inventory = await pass(designInventoryPass(designs, blockName), 'pass1');
   const elements = checkElements(inventory.value, sets);
   if (elements.dropped.length > 0) {
     run.note('pass1', `${elements.dropped.length} element(s) cited a node id that is not in the design`);
@@ -229,15 +307,29 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
   run.start('write');
   const markdown = renderRequirements({
     record,
-    design,
+    designs,
     ticket,
     requirements: checked.requirements,
     inferences: checked.inferences,
     gaps: checked.gaps,
   });
 
+  // Two readings of material already decided, and one serialisation of it.
+  // Rendered here rather than in the browser so that the run on disk and the
+  // run on screen are the same run -- a console is not the only thing that
+  // reads an analysis.
+  const gapsMarkdown = renderGaps({
+    record,
+    ticket,
+    gaps: checked.gaps,
+    inferences: checked.inferences,
+  });
+  const authoringMarkdown = renderAuthoringGuide(model.value, blockName);
+
   const fileName = modelFileName(blockName);
   await writeArtifact(storageDir, analysisId, REQUIREMENTS_FILE, markdown);
+  await writeArtifact(storageDir, analysisId, GAPS_MD_FILE, gapsMarkdown);
+  await writeArtifact(storageDir, analysisId, AUTHORING_FILE, authoringMarkdown);
   await writeJson(storageDir, analysisId, GAPS_FILE, {
     gaps: checked.gaps,
     inferences: checked.inferences,
@@ -264,6 +356,8 @@ export async function analyse(options: AnalyseOptions): Promise<AnalysisResult> 
     gaps: checked.gaps,
     model: model.value,
     markdown,
+    gapsMarkdown,
+    authoringMarkdown,
   };
 }
 

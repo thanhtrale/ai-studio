@@ -28,6 +28,15 @@ export interface ReadDesignOptions {
    * pass can use spends seconds and proves nothing.
    */
   wantRender?: boolean;
+  /**
+   * Ask for Figma's own code guess.
+   *
+   * Taken for the primary view only when several are read. It is six thousand
+   * characters that carry no citable id, and the second and third copies of it
+   * say the same thing about the same block in a narrower frame -- context
+   * spent on redundancy is context not spent on the design.
+   */
+  wantInterpretation?: boolean;
   digest?: DigestOptions;
 }
 
@@ -108,12 +117,17 @@ export class FigmaMcpSource implements DesignSource {
       adapter: this.name,
       fileKey: reference.fileKey,
       nodeId,
+      // A first guess only. The pipeline reads every view before it can know
+      // whether two of them are called the same thing, so it owns the final
+      // label; this is what it has to work with.
+      label: tree.name || 'view',
       digest: digest.digest,
       nodeIds: digest.nodeIds,
       tokens: [],
       droppedNodes: digest.droppedNodes,
     };
     if (tree.name) design.name = tree.name;
+    if (tree.width !== undefined) design.width = tree.width;
     if (digest.truncatedAtDepth !== undefined) design.truncatedAtDepth = digest.truncatedAtDepth;
 
     // Everything below is best effort. A design with a digest and no tokens is
@@ -126,7 +140,9 @@ export class FigmaMcpSource implements DesignSource {
       );
     }
 
-    const context = await this.#optional(session, 'get_design_context', { nodeId }, degraded);
+    const context = options.wantInterpretation === false
+      ? null
+      : await this.#optional(session, 'get_design_context', { nodeId }, degraded);
     if (context) {
       const text = textOfResult(context);
       // Labelled as an interpretation where it is used: it is Figma's own

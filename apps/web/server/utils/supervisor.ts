@@ -6,6 +6,7 @@ import type {
   InventoryResponse,
   JobProgressResponse,
 } from '@ai-studio/arm-contract';
+import { patientFetchInit } from '@ai-studio/arm-contract';
 
 /**
  * Failure categories the browser is allowed to distinguish. The point of the
@@ -86,6 +87,9 @@ export class SupervisorClient {
     let response: Response;
     try {
       response = await this.#fetch(`${this.#baseUrl}${pathname}`, {
+        // A job submission does not answer until the job is done, which for a
+        // batch or a clip is longer than Node's own five-minute ceiling.
+        ...patientFetchInit(),
         ...init,
         headers: {
           ...init.headers,

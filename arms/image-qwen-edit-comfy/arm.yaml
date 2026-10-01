@@ -1,0 +1,63 @@
+id: image-qwen-edit-comfy
+name: Qwen-Image-Edit 2511 (ComfyUI)
+modality: image
+protocol: native
+lifecycle: resident
+capabilities:
+  - image.generate
+resources:
+  gpu: exclusive
+  # The fp8 transformer, the VL text encoder and the VAE, plus the activation
+  # peak at 1 megapixel. ComfyUI streams what will not fit, so this is what it
+  # wants rather than a hard floor.
+  vramEstimateMb: 15300
+launch:
+  cwd: .
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen_comfy"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--text-encoder"
+    - "{{textEncoder}}"
+    - "--vae"
+    - "{{vae}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+    - "--weight-dtype"
+    - "{{weightDtype}}"
+    - "--text-encoder-device"
+    - "{{textEncoderDevice}}"
+    - "--vram-mode"
+    - "{{vramMode}}"
+    - "--attention"
+    - "{{attention}}"
+    - "--reserve-vram"
+    - "{{reserveVram}}"
+    - "--cache-mode"
+    - "{{cacheMode}}"
+    - "--extra-args"
+    - "{{extraArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    # ComfyUI's own start-up chatter is the only place its load phases appear.
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  # Answers as soon as this arm is listening. ComfyUI itself is started by the
+  # first job, because importing torch and scanning nodes outlasts any sensible
+  # health timeout.
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

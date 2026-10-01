@@ -1,0 +1,62 @@
+id: video-minimax-h3-comfy
+name: MiniMax-H3 + Turbo LoRA (ComfyUI, video + audio)
+modality: video
+protocol: native
+lifecycle: resident
+capabilities:
+  - video.generate
+resources:
+  gpu: exclusive
+  vramEstimateMb: 15500
+launch:
+  cwd: .
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_h3"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--text-encoder"
+    - "{{textEncoder}}"
+    - "--video-vae"
+    - "{{videoVae}}"
+    - "--audio-vae"
+    - "{{audioVae}}"
+    - "--turbo-lora"
+    - "{{turboLora}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+    - "--weight-dtype"
+    - "{{weightDtype}}"
+    - "--text-encoder-device"
+    - "{{textEncoderDevice}}"
+    - "--lora-mode"
+    - "{{loraMode}}"
+    - "--vram-mode"
+    - "{{vramMode}}"
+    - "--attention"
+    - "{{attention}}"
+    - "--reserve-vram"
+    - "{{reserveVram}}"
+    - "--cache-mode"
+    - "{{cacheMode}}"
+    - "--extra-args"
+    - "{{extraArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

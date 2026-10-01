@@ -23,7 +23,17 @@
 
 import type { JobProgress } from '@ai-studio/arm-contract';
 
-import type { AnalysisRun } from '../registry';
+/**
+ * Somewhere to hang a running arm's own timeline.
+ *
+ * Structural rather than `AnalysisRun` because two features now report their
+ * own progress -- a block analysis and a file survey -- and they are different
+ * runs with different steps. Grafting is the only thing a pass needs from
+ * either of them, so it is the only thing asked for.
+ */
+export interface PassHost {
+  graft(key: string, progress: Pick<JobProgress, 'steps' | 'armVram'>): void;
+}
 
 export interface ArmMessage {
   role: 'system' | 'user' | 'assistant';
@@ -136,7 +146,7 @@ export interface RunPassOptions {
   armParams?: Record<string, unknown>;
   analysisId: string;
   caller: ArmCaller;
-  run?: AnalysisRun;
+  run?: PassHost;
   /** Poll the arm's own progress while the pass runs, to nest it under the step. */
   pollMs?: number;
 }

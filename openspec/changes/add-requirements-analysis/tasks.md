@@ -67,3 +67,22 @@
 - [x] 9.1 Run one real analysis — a real Figma frame, a real exported ticket — on the Gemma arm and again on the Qwen arm, and verify both complete with no pipeline change and each result records its arm
 - [x] 9.2 Verify `npm test`, `npm run lint` and `npm run typecheck` all pass
 - [x] 9.3 Add the feature to the root `README.md` — the console table, the storage layout, and what the Figma desktop dependency means — and verify the routes described match the ones that exist
+
+## 10. Several viewports, one block
+
+- [x] 10.1 Move the link rules into `apps/web/shared/figma-link.ts` so the console and the route apply one implementation, and verify the console refuses a link the route would refuse, before the button is pressed
+- [x] 10.2 Extract links from the text they were pasted in, and verify `Implement this design from Figma. @<url>` reads the link rather than refusing the sentence
+- [x] 10.3 Accept several links as views of one block, refuse links to two files, dedupe a repeat and cap the count; verify each with a test naming the reason
+- [x] 10.4 Share one digest budget between the views, and take the rendering and the code guess for the primary view only; verify one view still receives exactly the former defaults
+- [x] 10.5 Tell pass 1 that several frames are one block and have it record what differs between them; verify the single-frame prompt is unchanged and the multi-frame prompt labels each view
+- [x] 10.6 Forbid a viewport, breakpoint or per-device field in pass 4, and verify the rule is stated only when the inventory actually carries a responsive note
+- [x] 10.7 Union every view's node ids into one evidence set, and verify an element citing the second frame's id survives the check
+- [x] 10.8 Name every frame in `requirements.md` and in the record, disambiguating two frames that share a name; verify a multi-view report cannot be mistaken for a desktop-only reading
+
+## 11. Reading the result
+
+- [x] 11.1 Render the reports in the console instead of showing their source, escaping every character before any rule runs; verify a ticket containing `<script>` displays as text and emits no tag
+- [x] 11.2 Add `renderGaps` — a worklist, one heading per gap with its question last — write it as `gaps.md`, and verify it cites a passage by its heading rather than by its ordinal
+- [x] 11.3 Add `renderAuthoringGuide` — what each field asks for, companions folded under their owner, variants separated as not content — write it as `authoring.md`
+- [x] 11.4 Check the proposal for failures that parse cleanly (empty filter, missing alt field, choice with no options, container mixed with an item definition, definition pointing at a missing model) and verify the checks fire on the first real analysis this repository produced
+- [x] 11.5 Give the console four tabs, copying the markdown source rather than the rendering; verify `npm test`, `npm run lint` and `npm run typecheck` all pass

@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Qwen-Image 2.1 + viggle-turbo (ComfyUI) start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "diffusionModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Qwen-Image 2.1 transformer, loaded by ComfyUI's UNETLoader.",
+      "default": "models/qwen-image-2.1/diffusion_models/qwen_image_2.1_bf16.safetensors"
+    },
+    "textEncoder": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Qwen3-VL 8B. Qwen-Image 2.1 uses this rather than the 2.5-VL encoder the edit arm loads, and it is also the model that rewrites a prompt when the enhancer is on.",
+      "default": "models/qwen-image-2.1/text_encoders/qwen3vl_8b_int8_convrot.safetensors"
+    },
+    "vae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Qwen-Image 2.1's own VAE. Its latent is 64 channels at a sixteenth scale, so the 2511 VAE will not do.",
+      "default": "models/qwen-image-2.1/vae/qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "turboLora": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The viggle-turbo LoRA, applied unmerged at runtime. This arm is the six-step schedule that LoRA was distilled for; without it the graph would need forty steps and guidance.",
+      "default": "models/qwen-image-2.1/loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's reference images are confined to. ComfyUI is given this as its own input directory, so a reference is named relative to it and nothing outside it can be read.",
+      "default": "inputs"
+    },
+    "scratchDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where ComfyUI keeps its own output, temp, user and database files. Nothing here is the library's; finished images are moved out of it.",
+      "default": "cache/comfy21"
+    },
+    "weightDtype": {
+      "type": "string",
+      "enum": ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+      "description": "How the transformer is held. The bf16 checkpoint is 13 GiB and the text encoder wants the rest of a 16 GiB card, so fp8 is what keeps both resident instead of streamed.",
+      "default": "fp8_e4m3fn"
+    },
+    "textEncoderDevice": {
+      "type": "string",
+      "enum": ["default", "cpu"],
+      "description": "cpu keeps Qwen3-VL off the card entirely. It also makes the prompt enhancer far slower, because the enhancer is that same model generating text.",
+      "default": "default"
+    },
+    "vramMode": {
+      "type": "string",
+      "enum": ["dynamic", "highvram", "lowvram", "novram"],
+      "description": "dynamic is ComfyUI's own memory manager, which streams whatever will not fit. The rest pin its behaviour.",
+      "default": "dynamic"
+    },
+    "attention": {
+      "type": "string",
+      "enum": ["pytorch", "sage", "flash", "split", "quad"],
+      "description": "Attention backend. sage and flash need their own packages installed into this arm's venv.",
+      "default": "pytorch"
+    },
+    "reserveVram": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 8,
+      "description": "GiB left to the desktop compositor. Too little and Windows starts evicting the model behind ComfyUI's back.",
+      "default": 0.8
+    },
+    "cacheMode": {
+      "type": "string",
+      "enum": ["ram", "classic", "lru", "none"],
+      "description": "What ComfyUI keeps between jobs. ram is its default; none re-runs every node each time, which throws away the cached prompt encode a batch depends on.",
+      "default": "ram"
+    },
+    "kvCacheDevice": {
+      "type": "string",
+      "enum": ["auto", "gpu", "cpu", "off"],
+      "description": "Where Qwen-Image 2.1 keeps the attention prefix cache. auto uses spare VRAM then RAM; off recomputes the prefix every step, which is slower but rules the cache out.",
+      "default": "auto"
+    },
+    "kvCacheDtype": {
+      "type": "string",
+      "enum": ["default", "int8", "int4"],
+      "description": "Prefix cache precision. int8 halves it at about bf16 accuracy; int4 quarters it and roughly doubles the per-step error.",
+      "default": "default"
+    },
+    "extraArgs": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Extra ComfyUI command line flags, split on whitespace and passed through verbatim.",
+      "default": ""
+    }
+  }
+}

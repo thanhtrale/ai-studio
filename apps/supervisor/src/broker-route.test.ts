@@ -128,10 +128,9 @@ describe('the broker route', () => {
 
     expect(acquire?.label).toBe('Queued for the card');
     expect(acquire?.detail).toContain('image-fake');
-    expect(acquire?.children?.map((child) => child.label)).toEqual([
-      'Stopped image-fake to free the card',
-      'Started video-fake',
-    ]);
+    expect(acquire?.children).toBeUndefined();
+    expect(acquire?.detail).toContain('Stopped image-fake to free the card');
+    expect(acquire?.detail).toContain('Started video-fake');
     expect(harness.terminations).toHaveLength(1);
   });
 
@@ -160,10 +159,8 @@ describe('the broker route', () => {
     expect(harness.processes).toHaveLength(2);
 
     const seen = (await (await fetch(`${baseUrl}/v1/jobs/${jobId}`, { headers: auth })).json()) as JobProgressResponse;
-    expect(seen.job.steps[0]?.children?.map((child) => child.label)).toEqual([
-      'Unloaded video-fake',
-      'Started video-fake',
-    ]);
+    expect(seen.job.steps[0]?.detail).toContain('Unloaded video-fake');
+    expect(seen.job.steps[0]?.detail).toContain('Started video-fake');
   });
 
   it("merges the arm's own steps in behind the broker's", async () => {
