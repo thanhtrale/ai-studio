@@ -12,6 +12,16 @@
         >
           {{ item.label }}
         </NuxtLink>
+
+        <div class="ml-auto flex items-center gap-3 text-sm">
+          <template v-if="user">
+            <span class="hidden text-ink-500 sm:inline">{{ user.email }}</span>
+            <button type="button" class="text-ink-200 hover:text-white" @click="signOut">Đăng xuất</button>
+          </template>
+          <button v-else-if="ready" type="button" class="text-ink-200 hover:text-white" @click="signIn">
+            Đăng nhập
+          </button>
+        </div>
       </nav>
     </header>
 
@@ -26,9 +36,12 @@
 </template>
 
 <script setup lang="ts">
+const { user, ready, signIn, signOut } = useAuth();
+
 const links = [
+  { to: '/jobs', label: 'Jobs' },
+  { to: '/gallery', label: 'Gallery' },
   { to: '/files', label: 'Thư viện' },
   { to: '/p2p', label: 'P2P' },
-  { to: '/about', label: 'Giới thiệu' },
 ];
 </script>

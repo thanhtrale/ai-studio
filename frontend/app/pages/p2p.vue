@@ -12,6 +12,13 @@
       <span v-if="connectionState" class="rounded-full border border-white/15 px-3 py-1 text-xs text-ink-200">
         ICE: {{ connectionState }}
       </span>
+      <button
+        type="button"
+        class="rounded-full border border-white/15 px-3 py-1 text-xs text-ink-200 hover:bg-white/10"
+        @click="probeIce"
+      >
+        Kiểm tra ICE
+      </button>
     </div>
 
     <p v-if="error" class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -153,6 +160,7 @@ const {
   joinRoom,
   sendFile,
   discard,
+  probeIce,
   hangUp,
 } = useWebRtcTransfer();
 

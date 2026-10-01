@@ -148,13 +148,59 @@ export function useWebRtcTransfer() {
   let ackedBytes = 0;
   let ackWaiter: (() => void) | null = null;
 
+  // Remote candidates can arrive before the answer does: the two Firestore
+  // listeners are independent. addIceCandidate() throws until a remote
+  // description exists, so hold them here and flush once it is set.
+  let pendingCandidates: RTCIceCandidateInit[] = [];
+  const seenCandidateTypes = new Set<string>();
+
   function iceServers(): RTCIceServer[] {
     const servers: RTCIceServer[] = [
-      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+      {
+        urls: [
+          'stun:stun.l.google.com:19302',
+          'stun:stun1.l.google.com:19302',
+          // Port 3478 is the registered STUN port; some networks drop 19302 only.
+          'stun:stun.cloudflare.com:3478',
+          'stun:stun.nextcloud.com:443',
+        ],
+      },
     ];
     const urls = turn.urls.split(',').map((url) => url.trim()).filter(Boolean);
     if (urls.length) servers.push({ urls, username: turn.username, credential: turn.credential });
     return servers;
+  }
+
+  /** Gathers candidates against a throwaway connection to see which paths exist. */
+  async function probeIce() {
+    const pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const found = new Set<string>();
+    try {
+      pc.createDataChannel('probe');
+      pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate?.type) found.add(event.candidate.type);
+      });
+      await pc.setLocalDescription(await pc.createOffer());
+      note('đang kiểm tra ICE…');
+
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        const timer = setTimeout(resolve, 8000);
+        pc.addEventListener('icegatheringstatechange', () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
+
+      const types = [...found];
+      note(`kết quả ICE: ${types.join(', ') || 'không có candidate nào'}`);
+      if (!types.includes('srflx')) note('không có srflx → STUN bị chặn, cần TURN');
+      if (types.includes('relay')) note('có relay → TURN dùng được');
+    } finally {
+      pc.close();
+    }
   }
 
   function db(): Firestore {
@@ -171,6 +217,25 @@ export function useWebRtcTransfer() {
     error.value = cause instanceof Error ? cause.message : String(cause);
     phase.value = 'failed';
     note(`lỗi: ${error.value}`);
+  }
+
+  async function addCandidate(pc: RTCPeerConnection, init: RTCIceCandidateInit) {
+    if (!pc.remoteDescription) {
+      pendingCandidates.push(init);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(init));
+    } catch (cause) {
+      note(`ICE candidate bị bỏ: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
+  async function flushCandidates(pc: RTCPeerConnection) {
+    const queued = pendingCandidates;
+    pendingCandidates = [];
+    if (queued.length) note(`nạp ${queued.length} ICE candidate đã xếp hàng`);
+    for (const init of queued) await addCandidate(pc, init);
   }
 
   function handleControl(control: Control) {
@@ -251,8 +316,22 @@ export function useWebRtcTransfer() {
       note(`connection: ${pc.connectionState}`);
       if (pc.connectionState === 'failed') phase.value = 'failed';
     };
+    pc.oniceconnectionstatechange = () => note(`ice: ${pc.iceConnectionState}`);
     pc.onicegatheringstatechange = () => note(`ice gathering: ${pc.iceGatheringState}`);
     return pc;
+  }
+
+  function publishCandidate(target: ReturnType<typeof collection>, candidate: RTCIceCandidate | null) {
+    if (!candidate) {
+      note(`gom xong candidate: ${[...seenCandidateTypes].join(', ') || 'không có'}`);
+      return;
+    }
+    // Seeing only `host` here means no public path was found; `relay` means TURN.
+    if (candidate.type && !seenCandidateTypes.has(candidate.type)) {
+      seenCandidateTypes.add(candidate.type);
+      note(`candidate loại ${candidate.type}`);
+    }
+    void addDoc(target, candidate.toJSON());
   }
 
   async function createRoom() {
@@ -271,9 +350,7 @@ export function useWebRtcTransfer() {
       const callerCandidates = collection(roomRef, 'callerCandidates');
       const calleeCandidates = collection(roomRef, 'calleeCandidates');
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) void addDoc(callerCandidates, event.candidate.toJSON());
-      };
+      pc.onicecandidate = (event) => publishCandidate(callerCandidates, event.candidate);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -286,12 +363,18 @@ export function useWebRtcTransfer() {
         onSnapshot(roomRef, (snapshot) => {
           const answer = snapshot.data()?.['answer'];
           if (answer && pc.signalingState === 'have-local-offer') {
-            void pc.setRemoteDescription(new RTCSessionDescription(answer)).then(() => note('nhận answer'));
+            void pc
+              .setRemoteDescription(new RTCSessionDescription(answer))
+              .then(() => {
+                note('nhận answer');
+                return flushCandidates(pc);
+              })
+              .catch((cause) => fail(cause));
           }
         }),
         onSnapshot(calleeCandidates, (snapshot) => {
           for (const change of snapshot.docChanges()) {
-            if (change.type === 'added') void pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+            if (change.type === 'added') void addCandidate(pc, change.doc.data() as RTCIceCandidateInit);
           }
         }),
       );
@@ -322,9 +405,7 @@ export function useWebRtcTransfer() {
       const callerCandidates = collection(roomRef, 'callerCandidates');
       const calleeCandidates = collection(roomRef, 'calleeCandidates');
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) void addDoc(calleeCandidates, event.candidate.toJSON());
-      };
+      pc.onicecandidate = (event) => publishCandidate(calleeCandidates, event.candidate);
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
@@ -335,7 +416,7 @@ export function useWebRtcTransfer() {
       unsubscribes.push(
         onSnapshot(callerCandidates, (snap) => {
           for (const change of snap.docChanges()) {
-            if (change.type === 'added') void pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+            if (change.type === 'added') void addCandidate(pc, change.doc.data() as RTCIceCandidateInit);
           }
         }),
       );
@@ -420,6 +501,8 @@ export function useWebRtcTransfer() {
     writeQueue = Promise.resolve();
     ackWaiter = null;
     ackedBytes = 0;
+    pendingCandidates = [];
+    seenCandidateTypes.clear();
     sending.value = null;
     receiving.value = null;
     connectionState.value = '';
@@ -451,6 +534,7 @@ export function useWebRtcTransfer() {
     joinRoom,
     sendFile,
     discard,
+    probeIce,
     hangUp,
   };
 }

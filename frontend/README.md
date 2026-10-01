@@ -37,12 +37,24 @@ npm run deploy            # generate + deploy lên ai-studio-client
 npm run deploy:preview    # deploy lên preview channel, URL tạm
 ```
 
-### Storage / Firestore rules — KHÔNG deploy tự động
+### Rules
 
-`storage.rules` và `firestore.rules` cố ý **không** được khai trong `firebase.json`.
-Rules có phạm vi **toàn bucket / toàn database, dùng chung cả project** — đẩy lên sẽ
-ghi đè rules của app khác đang dùng `forward-camera-345608`. Cách an toàn: mở Console,
-chèn khối cần thiết vào rules đang chạy.
+Firestore và Storage của project dùng chung với app khác, mà Firebase không có
+deploy từng phần — một lần deploy là thay cả file. Nên rules của app này nằm ở
+`rules/*.ai-studio.rules` dưới dạng khối rời, và `scripts/sync-rules.py` kéo
+ruleset đang chạy về rồi splice khối đó vào giữa hai marker:
+
+```bash
+python3 scripts/sync-rules.py --diff    # xem sẽ đổi gì
+npx firebase-tools deploy --only firestore:rules,storage \
+  --project forward-camera-345608 --config firebase.rules.json
+```
+
+Script chỉ chạm phần giữa `// >>> ai-studio` và `// <<< ai-studio`; mọi rules
+khác được chép nguyên văn. Bản đang chạy luôn được lưu lại ở
+`.rules-backup/*.live.rules` trước khi ghép, dùng để rollback.
+
+`firebase.json` cố ý **không** khai rules, nên `npm run deploy` chỉ đụng Hosting.
 
 ## POC truyền tệp P2P (`/p2p`)
 
@@ -51,8 +63,7 @@ tệp đi thẳng giữa 2 trình duyệt, không qua server.
 
 Cách test:
 
-1. Bật Firestore trong project và chèn khối `ai-studio` từ `firestore.rules` vào
-   rules đang chạy. Không có bước này thì mọi thao tác bị từ chối.
+1. Chèn rules bằng `scripts/sync-rules.py` (xem mục Rules ở trên).
 2. Mở `/p2p` trên máy A → **Tạo phòng** → được mã 6 ký tự.
 3. Mở `/p2p` trên máy B → nhập mã → **Kết nối**.
 4. Khi trạng thái là "Đã kết nối" thì chọn tệp để gửi. Gửi được cả 2 chiều.

@@ -1,0 +1,8 @@
+{
+  "firestore": {
+    "rules": ".rules-backup/firestore.merged.rules"
+  },
+  "storage": {
+    "rules": ".rules-backup/storage.merged.rules"
+  }
+}

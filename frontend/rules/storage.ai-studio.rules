@@ -1,0 +1,24 @@
+// Khối rules của ai-studio trong bucket dùng chung.
+// Không phải một ruleset hoàn chỉnh: scripts/sync-rules.py splice khối này vào
+// ruleset đang chạy trên project, giữ nguyên phần của các app khác.
+
+    // Ảnh tham chiếu: người dùng tự upload, mỗi người một thư mục theo uid.
+    match /ai-studio/refs/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Video đã gen và log của lượt chạy: worker ghi bằng Admin SDK, client chỉ đọc.
+    match /ai-studio/outputs/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /ai-studio/logs/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }

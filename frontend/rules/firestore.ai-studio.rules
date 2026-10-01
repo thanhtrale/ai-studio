@@ -1,0 +1,45 @@
+// Khối rules của ai-studio trong Firestore dùng chung.
+// Không phải một ruleset hoàn chỉnh: scripts/sync-rules.py splice khối này vào
+// ruleset đang chạy trên project, giữ nguyên phần của các app khác.
+
+    // Signalling cho POC truyền tệp P2P: mở, không chứa dữ liệu người dùng.
+    match /ai-studio/p2p/rooms/{room} {
+      allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
+    }
+
+    // Hàng đợi job gen video. Người dùng chỉ tạo được job ở trạng thái queued và
+    // đứng tên chính mình; mọi chuyển trạng thái sau đó do worker thực hiện qua
+    // Admin SDK nên không đi qua rules này.
+    match /ai-studio/video/jobs/{jobId} {
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null
+        && request.resource.data.createdBy.uid == request.auth.uid
+        && request.resource.data.status == 'queued'
+        && request.resource.data.claimedBy == null
+        && request.resource.data.result == null;
+
+      allow update: if request.auth != null
+        && resource.data.createdBy.uid == request.auth.uid
+        && request.resource.data.status == 'canceled'
+        && resource.data.status in ['queued', 'claimed', 'running'];
+
+      allow delete: if request.auth != null
+        && resource.data.createdBy.uid == request.auth.uid
+        && resource.data.status in ['done', 'failed', 'canceled'];
+    }
+
+    match /ai-studio/video/gallery/{itemId} {
+      allow read: if request.auth != null;
+      allow delete: if request.auth != null
+        && resource.data.createdBy.uid == request.auth.uid;
+      allow create, update: if false;
+    }
+
+    match /ai-studio/video/workers/{workerId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }

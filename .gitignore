@@ -14,6 +14,14 @@ dist/
 .firebase/
 firebase-debug.log
 
+# Rules pulled from the live project: they contain other apps' rules, which are
+# not this repository's to carry.
+.rules-backup/
+
+# Firebase service account keys — these ARE secrets, unlike the web config.
+*service-account*.json
+*firebase-adminsdk*.json
+
 # Env & secrets
 .env
 .env.*
