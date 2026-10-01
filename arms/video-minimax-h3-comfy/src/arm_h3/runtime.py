@@ -24,11 +24,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import wsevents
 from .jobobject import KillOnClose
 from .logscan import model_label, parse_line, split_stream
 from .progress import JobProgress
@@ -70,6 +72,16 @@ CACHE_MODE_FLAGS: dict[str, list[str]] = {
 #: The folder under this arm's `custom_nodes/` holding Larryvrh's two nodes,
 #: and the only thing `--disable-all-custom-nodes` is asked to let through.
 TURBO_NODE_PACKAGE = "minimax_h3_turbo"
+
+#: How far back a phase reaches to claim a load as its own.
+#:
+#: ComfyUI announces `executing` before it runs a node, so a load the node
+#: triggers belongs to it -- but that announcement crosses an event loop and a
+#: websocket while the log crosses a pipe, and the pipe wins. A VAE, which
+#: loads in the node's first instruction, therefore lands a breath before the
+#: event that explains it. Long enough to cover that gap, short enough that a
+#: load from the middle of the previous phase cannot be dragged forward.
+LOAD_REATTACH_SECONDS = 1.0
 
 
 class ChildFailed(RuntimeError):
@@ -212,7 +224,7 @@ def free_port(host: str) -> int:
 
 @dataclass
 class JobScan:
-    """What the log said about the prompt currently running."""
+    """What the log and the event socket said about the running prompt."""
 
     steps_total: int = 0
     steps_done: int = 0
@@ -223,6 +235,15 @@ class JobScan:
     active: bool = False
     meter_key: str = "steps"
     meter_label: str = "Sampler steps"
+    #: Node id to timeline label, for the nodes worth a line of their own.
+    phases: dict[str, str] = field(default_factory=dict)
+    #: The node whose progress bar is the denoising loop, so its steps can be
+    #: counted out underneath it rather than floating beside it.
+    sampler_node: str = ""
+    #: The phase step currently open. A load or a sampler step is filed under
+    #: it, which is what puts "Load transformer" inside "Denoise" rather than
+    #: beside it -- the load happens because the sampler asked for the weights.
+    phase_key: str | None = None
 
 
 class ComfyServer:
@@ -233,8 +254,12 @@ class ComfyServer:
         self.progress = progress
         self.host = host
         self.port: int | None = None
+        # ComfyUI addresses its `executing` events to the client that queued
+        # the prompt, so the same id goes into `/prompt` and onto `/ws`.
+        self.client_id = uuid.uuid4().hex
         self._process: subprocess.Popen[bytes] | None = None
         self._reader: threading.Thread | None = None
+        self._events: threading.Thread | None = None
         self._tail: list[str] = []
         self._lock = threading.Lock()
         self.scan = JobScan()
@@ -244,6 +269,9 @@ class ComfyServer:
         # and also queued, for the form that cannot: ComfyUI announces a group
         # of models before loading any of them, but in the order it loads them.
         self._loading: deque[str] = deque()
+        #: Load steps in the order they opened, so a phase that arrives just
+        #: after one can claim it. See `LOAD_REATTACH_SECONDS`.
+        self._loads: deque[str] = deque(maxlen=8)
         # Kills the child if this process is terminated without unwinding,
         # which is exactly how the supervisor stops an arm it has to stop hard.
         self._job = KillOnClose()
@@ -306,6 +334,8 @@ class ComfyServer:
         self._reader = threading.Thread(target=self._read_log, daemon=True)
         self._reader.start()
         self._await_ready()
+        self._events = threading.Thread(target=self._read_events, daemon=True)
+        self._events.start()
 
     def stop(self, timeout: float = 20.0) -> None:
         process = self._process
@@ -381,7 +411,12 @@ class ComfyServer:
             return "\n".join(self._tail[-TAIL_LINES:])
 
     def begin_scan(
-        self, steps_total: int, meter_key: str = "steps", meter_label: str = "Sampler steps"
+        self,
+        steps_total: int,
+        meter_key: str = "steps",
+        meter_label: str = "Sampler steps",
+        phases: dict[str, str] | None = None,
+        sampler_node: str = "",
     ) -> JobScan:
         with self._lock:
             self.scan = JobScan(
@@ -389,15 +424,107 @@ class ComfyServer:
                 active=True,
                 meter_key=meter_key,
                 meter_label=meter_label,
+                phases=dict(phases or {}),
+                sampler_node=sampler_node,
             )
             # A load left open by the previous prompt must not swallow this
             # one's first "loaded" line and report someone else's duration.
             self._loading.clear()
+            self._loads.clear()
             return self.scan
 
     def end_scan(self) -> None:
         with self._lock:
             self.scan.active = False
+            open_phase = self.scan.phase_key
+            self.scan.phase_key = None
+        # The last phase has no `executing` event after it to close it: the
+        # prompt simply ends.
+        if open_phase is not None:
+            self.progress.finish_step(open_phase)
+
+    def _read_events(self) -> None:
+        """Follow ComfyUI's `executing` events for as long as the child lives.
+
+        Best-effort on purpose: losing this socket costs the phase breakdown
+        and nothing else, so a child that outlives its event stream still
+        generates, still reports loads, and still counts its sampler steps.
+        """
+        port = self.port
+        if port is None:
+            return
+        try:
+            for message in wsevents.events(self.host, port, self.client_id):
+                self._absorb_event(message)
+        except (OSError, wsevents.SocketClosed, ValueError) as error:
+            print(f"[arm] event socket closed ({error})", flush=True)
+
+    def _absorb_event(self, message: dict[str, Any]) -> None:
+        """One `executing` event: close the phase that ended, open the next.
+
+        A node with no label of its own -- a loader, the guider -- still ends
+        whatever phase was running. That is what keeps "Encode prompt" from
+        staying open across the whole graph because nothing named closed it.
+        """
+        if message.get("type") != "executing":
+            return
+        data = message.get("data")
+        node = data.get("node") if isinstance(data, dict) else None
+        node = node if isinstance(node, str) else None
+
+        with self._lock:
+            if not self.scan.active:
+                return
+            label = self.scan.phases.get(node) if node is not None else None
+            previous = self.scan.phase_key
+            opening = f"phase:{node}" if label else None
+            if opening == previous:
+                return
+            self.scan.phase_key = opening
+            total = self.scan.steps_total
+            sampling = bool(label) and node == self.scan.sampler_node
+
+        if previous is not None:
+            self.progress.finish_step(previous)
+        if label and opening is not None:
+            self.progress.start(opening, label, parent="generate")
+            self._claim_recent_loads(opening)
+            # The bar reports steps as they finish, so the first one has to be
+            # opened by the phase itself or it would only ever appear done.
+            if sampling and total > 0:
+                self.progress.start(f"{opening}:step1", f"step 1 of {total}", parent=opening)
+
+    def _claim_recent_loads(self, phase: str) -> None:
+        """Take the load this phase caused but was announced too late to own.
+
+        Claimed once and then forgotten: two decoders run back to back, and a
+        phase that could still reach a load the phase before it already took
+        would drag it along one node at a time.
+        """
+        cutoff = time.perf_counter() - LOAD_REATTACH_SECONDS
+        with self._lock:
+            recent = list(self._loads)
+        for key in recent:
+            started = self.progress.started_at(key)
+            if started is None or started < cutoff:
+                continue
+            with self._lock:
+                if key not in self._loads:
+                    continue
+                self._loads.remove(key)
+            self.progress.reparent(key, phase)
+
+    def _count_sampler_step(self, done: int, total: int) -> None:
+        """Close the sampler step the bar just reported, and open the next."""
+        with self._lock:
+            phase = self.scan.phase_key
+            sampling = phase is not None and phase.endswith(self.scan.sampler_node)
+        if phase is None or not sampling:
+            return
+
+        self.progress.finish_step(f"{phase}:step{done}")
+        if done < total:
+            self.progress.start(f"{phase}:step{done + 1}", f"step {done + 1} of {total}", parent=phase)
 
     def _read_log(self) -> None:
         process = self._process
@@ -447,7 +574,12 @@ class ComfyServer:
             with self._lock:
                 if key not in self._loading:
                     self._loading.append(key)
-            self.progress.start(key, model_label(event.name), event.name, parent="generate")
+                if key not in self._loads:
+                    self._loads.append(key)
+                # The weights are read because some node asked for them, so
+                # the load belongs inside that node's phase.
+                parent = self.scan.phase_key or "generate"
+            self.progress.start(key, model_label(event.name), event.name, parent=parent)
             return
 
         if event.kind == "staged":
@@ -469,6 +601,7 @@ class ComfyServer:
                 key, label = self.scan.meter_key, self.scan.meter_label
             self.progress.meter(key, label, event.total, detail=event.rate)
             self.progress.advance(key, event.index, event.total)
+            self._count_sampler_step(event.index, event.total)
 
     def _finish_load(self, key: str, megabytes: int, how: str) -> None:
         """Close a load step, if it is one this job opened.

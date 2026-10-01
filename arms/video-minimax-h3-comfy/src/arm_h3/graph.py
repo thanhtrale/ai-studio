@@ -87,6 +87,21 @@ DECODE_AUDIO = "decode_audio"
 CREATE = "create"
 SAVE = "save"
 
+#: Which nodes are worth a line on the studio's timeline, and what to call
+#: them. Keyed by the ids this module gives its own nodes, which is what makes
+#: ComfyUI's `executing` events readable as phases rather than as graph
+#: bookkeeping. The loaders are deliberately absent: they are instantaneous,
+#: and the load that costs minutes happens inside the node that first needs
+#: the weights -- so it files itself under that phase instead.
+PHASES: dict[str, str] = {
+    COND: "Encode prompt",
+    SAMPLER: "Denoise",
+    DECODE_VIDEO: "Decode video",
+    DECODE_AUDIO: "Decode audio",
+    CREATE: "Mux video and audio",
+    SAVE: "Write the file",
+}
+
 
 @dataclass
 class Models:

@@ -130,6 +130,18 @@ class JobProgress:
             if step is not None:
                 step.detail = detail
 
+    def reparent(self, key: str, parent: str) -> None:
+        """Move a step under a different owner, keeping its timings."""
+        with self._lock:
+            step = self._find(key)
+            if step is not None:
+                step.parent = parent
+
+    def started_at(self, key: str) -> float | None:
+        with self._lock:
+            step = self._find(key)
+            return None if step is None else step.started
+
     def annotate(self, key: str, note: str, replaces: str | None = None) -> None:
         with self._lock:
             step = self._find(key)
@@ -246,20 +258,21 @@ class JobProgress:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            by_parent: dict[str, list[dict[str, Any]]] = {}
+            # Grouped by parent and rendered recursively, because a phase has
+            # steps of its own: the load it triggered, and the sampler steps
+            # it counted out. Insertion order is time order, which is what
+            # makes the list read as a timeline at every depth.
+            children: dict[str | None, list[_Step]] = {}
             for step in self._steps:
-                if step.parent is not None:
-                    by_parent.setdefault(step.parent, []).append(self._render(step))
+                children.setdefault(step.parent, []).append(step)
 
-            steps = [
-                self._render(step, by_parent.get(step.key))
-                for step in self._steps
-                if step.parent is None
-            ]
+            def render(step: _Step) -> dict[str, Any]:
+                nested = [render(child) for child in children.get(step.key, [])]
+                return self._render(step, nested or None)
 
             return {
                 "jobId": self._job_id,
-                "steps": steps,
+                "steps": [render(step) for step in children.get(None, [])],
                 "meters": [
                     {
                         "key": entry.key,

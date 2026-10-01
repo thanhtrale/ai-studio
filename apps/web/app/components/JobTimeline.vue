@@ -9,23 +9,11 @@
  */
 import { computed } from 'vue';
 
-import type { JobProgress, JobStep } from '@ai-studio/arm-contract';
+import type { JobProgress } from '@ai-studio/arm-contract';
+
+import JobTimelineStep from './JobTimelineStep.vue';
 
 const props = defineProps<{ job: JobProgress | null; elapsedSeconds: number }>();
-
-const GLYPH: Record<JobStep['state'], string> = {
-  pending: '○',
-  running: '◍',
-  done: '✓',
-  failed: '✕',
-};
-
-const TONE: Record<JobStep['state'], string> = {
-  pending: 'text-slate-600',
-  running: 'text-indigo-300',
-  done: 'text-emerald-400',
-  failed: 'text-rose-400',
-};
 
 /** Seconds read at a glance: `2m 47s` beats `167.4 s` for anything this long. */
 function duration(seconds: number | undefined): string {
@@ -82,44 +70,7 @@ const tone = computed(() =>
     </p>
 
     <ol class="space-y-1.5 border-l border-white/10 pl-3">
-      <li v-for="step in job.steps" :key="step.key" class="space-y-1">
-        <div class="flex items-baseline gap-2 text-sm">
-          <span class="w-3 shrink-0" :class="TONE[step.state]">{{ GLYPH[step.state] }}</span>
-          <span class="text-slate-200">{{ step.label }}</span>
-          <span
-            v-if="step.state !== 'pending'"
-            class="rounded px-1 text-[10px]"
-            :class="
-              step.state === 'running'
-                ? 'bg-indigo-500/15 text-indigo-300'
-                : step.state === 'failed'
-                  ? 'bg-rose-500/15 text-rose-300'
-                  : 'bg-white/5 text-slate-500'
-            "
-          >
-            {{ step.state }}
-          </span>
-          <span v-if="step.detail" class="min-w-0 truncate text-xs text-slate-500">{{ step.detail }}</span>
-          <span class="ml-auto shrink-0 font-mono text-xs text-slate-400">{{ duration(step.seconds) }}</span>
-        </div>
-
-        <div v-if="step.note" class="ml-5 rounded border border-white/10 bg-black/30 p-2 text-xs">
-          <p v-if="step.noteReplaces" class="text-slate-600 line-through">{{ step.noteReplaces }}</p>
-          <p class="mt-1 leading-snug text-slate-300">{{ step.note }}</p>
-        </div>
-
-        <ol v-if="step.children?.length" class="ml-5 space-y-0.5">
-          <li
-            v-for="child in step.children"
-            :key="child.key"
-            class="flex items-baseline gap-2 text-xs"
-          >
-            <span class="w-3 shrink-0" :class="TONE[child.state]">{{ GLYPH[child.state] }}</span>
-            <span class="font-mono text-slate-400">{{ child.label }}</span>
-            <span class="ml-auto shrink-0 font-mono text-slate-500">{{ duration(child.seconds) }}</span>
-          </li>
-        </ol>
-      </li>
+      <JobTimelineStep v-for="step in job.steps" :key="step.key" :step="step" :depth="0" />
     </ol>
   </section>
 </template>

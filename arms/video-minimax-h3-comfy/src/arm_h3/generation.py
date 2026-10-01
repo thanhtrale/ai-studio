@@ -288,7 +288,11 @@ def _await_prompt(server: ComfyServer, prompt_id: str) -> dict[str, Any]:
 
 def _submit(server: ComfyServer, graph: dict[str, Any]) -> dict[str, Any]:
     prompt_id = str(uuid.uuid4())
-    submitted = server.post("/prompt", {"prompt": graph, "prompt_id": prompt_id})
+    # Addressed to this arm's client id, because ComfyUI sends its `executing`
+    # events to whoever queued the prompt and nowhere else.
+    submitted = server.post(
+        "/prompt", {"prompt": graph, "prompt_id": prompt_id, "client_id": server.client_id}
+    )
     node_errors = submitted.get("node_errors") if isinstance(submitted, dict) else None
     if node_errors:
         raise ChildFailed(f"ComfyUI would not run the graph: {node_errors}")
@@ -374,7 +378,11 @@ def generate(server: ComfyServer, models: Models, job: Job, progress: JobProgres
                 keyframes=job.keyframes,
             )
 
-            server.begin_scan(job.steps)
+            server.begin_scan(
+                job.steps,
+                phases=graph_module.PHASES,
+                sampler_node=graph_module.SAMPLER,
+            )
             try:
                 entry = _submit(
                     server, graph_module.build(models, sampling, f"aistudio/{uuid.uuid4()}")

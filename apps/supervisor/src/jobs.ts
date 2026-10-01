@@ -80,7 +80,6 @@ export class JobStore {
     if (!record) return;
     record.broker.children.push({ key, label, state: 'done', seconds });
   }
-
   /** The card is ready; from here the timeline is the arm's. */
   acquired(jobId: string): void {
     const record = this.#jobs.get(jobId);
@@ -131,13 +130,26 @@ export class JobStore {
     if (!record) return undefined;
 
     const now = this.#now();
+    // Flat on purpose. Getting the card into the right state is one wait from
+    // the reader's side, and what the broker did along the way is a sentence
+    // rather than a tree -- the steps worth nesting are the ones the arm
+    // reports, which is where a job actually spends its minutes.
+    //
+    // An action the plan already names is dropped: finding the arm loaded is
+    // both the reason there was nothing to do and the only thing that was
+    // done, and saying it twice reads like a stutter.
+    const did = record.broker.children
+      .map((child) => child.label)
+      .filter((label) => !record.broker.detail.includes(label));
+    const detail = [record.broker.detail, did.join(' · ')]
+      .filter((part) => part.length > 0)
+      .join(' — ');
     const brokerStep: JobStep = {
       key: BROKER_STEP_KEY,
       label: 'Queued for the card',
-      detail: record.broker.detail || undefined,
+      ...(detail ? { detail } : {}),
       state: record.broker.state,
       seconds: ((record.broker.endedAt ?? now) - record.broker.startedAt) / 1000,
-      ...(record.broker.children.length > 0 ? { children: record.broker.children } : {}),
     };
 
     return {

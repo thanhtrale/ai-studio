@@ -41,8 +41,20 @@ describe('JobStore', () => {
     const step = store.snapshot('job-1')?.steps[0];
     expect(step?.state).toBe('done');
     expect(step?.seconds).toBe(3);
-    expect(step?.detail).toBe('image-sdcpp holds the card');
-    expect(step?.children?.map((child) => child.label)).toEqual(['Stopped image-sdcpp']);
+    // One line, not a tree: getting the card ready is a single wait from the
+    // reader's side, and the steps worth nesting are the arm's.
+    expect(step?.detail).toBe('image-sdcpp holds the card — Stopped image-sdcpp');
+    expect(step?.children).toBeUndefined();
+  });
+
+  it('does not repeat an action the plan already named', () => {
+    const store = new JobStore();
+    store.open('job-1', 'video-ltx25');
+    store.plan('job-1', 'video-ltx25 is already loaded');
+    store.did('job-1', 'reuse', 'video-ltx25 is already loaded', 0);
+    store.acquired('job-1');
+
+    expect(store.snapshot('job-1')?.steps[0]?.detail).toBe('video-ltx25 is already loaded');
   });
 
   it("appends the arm's own steps after its own, without touching them", () => {
