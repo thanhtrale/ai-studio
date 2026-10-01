@@ -36,8 +36,14 @@ export interface NumberJobField extends FieldCommon {
   default: number;
   min: number;
   max: number;
-  /** Values the arm refuses unless they land on this grid. */
-  multipleOf?: number;
+  /**
+   * The values the arm accepts: `offset + n * block`.
+   *
+   * An offset rather than a plain multiple because both video arms have one —
+   * LTX takes `8n+1` frames and H3 takes `17n+5`, and snapping to 8 or 17 lands
+   * on a number each of them refuses.
+   */
+  grid?: { block: number; offset?: number };
 }
 
 export interface ToggleJobField extends FieldCommon {
@@ -162,9 +168,9 @@ export const JOB_TYPES: JobTypeSpec[] = [
     duration: { grid: 'h3', defaultSeconds: 5, minSeconds: 5, maxSeconds: 15, fps: 24 },
     fields: [
       ...PROMPT_FIELDS,
-      { name: 'width', label: 'Rộng', kind: 'number', default: 1344, min: 256, max: 2048, multipleOf: 32, group: 'frame', derived: true },
-      { name: 'height', label: 'Cao', kind: 'number', default: 768, min: 256, max: 2048, multipleOf: 32, group: 'frame', derived: true },
-      { name: 'numFrames', label: 'Số khung', kind: 'number', default: 124, min: 124, max: 362, group: 'frame', derived: true },
+      { name: 'width', label: 'Rộng', kind: 'number', default: 1344, min: 256, max: 2048, grid: { block: 32 }, group: 'frame', derived: true },
+      { name: 'height', label: 'Cao', kind: 'number', default: 768, min: 256, max: 2048, grid: { block: 32 }, group: 'frame', derived: true },
+      { name: 'numFrames', label: 'Số khung', kind: 'number', default: 124, min: 124, max: 362, grid: { block: 17, offset: 5 }, group: 'frame', derived: true },
       { name: 'steps', label: 'Steps', kind: 'number', default: 6, min: 1, max: 32, group: 'sampling' },
       { name: 'batch', label: 'Số clip', kind: 'number', default: 1, min: 1, max: 4, help: 'Mỗi clip là vài phút GPU.', group: 'sampling' },
       {
@@ -202,9 +208,9 @@ export const JOB_TYPES: JobTypeSpec[] = [
     duration: { grid: 'ltx', defaultSeconds: 5, minSeconds: 1, maxSeconds: 20, fps: null },
     fields: [
       ...PROMPT_FIELDS,
-      { name: 'width', label: 'Rộng', kind: 'number', default: 1216, min: 256, max: 1920, multipleOf: 32, group: 'frame', derived: true },
-      { name: 'height', label: 'Cao', kind: 'number', default: 704, min: 256, max: 1920, multipleOf: 32, group: 'frame', derived: true },
-      { name: 'numFrames', label: 'Số khung', kind: 'number', default: 121, min: 9, max: 481, multipleOf: 8, group: 'frame', derived: true },
+      { name: 'width', label: 'Rộng', kind: 'number', default: 1216, min: 256, max: 1920, grid: { block: 32 }, group: 'frame', derived: true },
+      { name: 'height', label: 'Cao', kind: 'number', default: 704, min: 256, max: 1920, grid: { block: 32 }, group: 'frame', derived: true },
+      { name: 'numFrames', label: 'Số khung', kind: 'number', default: 121, min: 9, max: 481, grid: { block: 8, offset: 1 }, group: 'frame', derived: true },
       { name: 'frameRate', label: 'FPS', kind: 'number', default: 24, min: 8, max: 60, group: 'frame', derived: true },
       { name: 'enhancePrompt', label: 'Enhance prompt', kind: 'toggle', default: false, help: 'Gemma viết lại prompt theo văn phong model được huấn luyện.', group: 'sampling' },
       { name: 'spatialUpsample', label: 'Upsample không gian', kind: 'toggle', default: true, group: 'sampling' },
@@ -230,8 +236,8 @@ export const JOB_TYPES: JobTypeSpec[] = [
     duration: null,
     fields: [
       ...PROMPT_FIELDS,
-      { name: 'width', label: 'Rộng', kind: 'number', default: 1024, min: 256, max: 4096, multipleOf: 16, group: 'frame', derived: true },
-      { name: 'height', label: 'Cao', kind: 'number', default: 1024, min: 256, max: 4096, multipleOf: 16, group: 'frame', derived: true },
+      { name: 'width', label: 'Rộng', kind: 'number', default: 1024, min: 256, max: 4096, grid: { block: 16 }, group: 'frame', derived: true },
+      { name: 'height', label: 'Cao', kind: 'number', default: 1024, min: 256, max: 4096, grid: { block: 16 }, group: 'frame', derived: true },
       { name: 'steps', label: 'Steps', kind: 'number', default: 20, min: 1, max: 100, group: 'sampling' },
       { name: 'cfgScale', label: 'CFG', kind: 'number', default: 2.5, min: 0, max: 30, group: 'sampling' },
       {
@@ -278,10 +284,13 @@ export function defaultJobValues(spec: JobTypeSpec): Record<string, unknown> {
 function coerceNumber(field: NumberJobField, raw: unknown): number {
   const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : field.default;
   const clamped = Math.min(field.max, Math.max(field.min, value));
-  if (!field.multipleOf) return clamped;
+  if (!field.grid) return clamped;
 
   // The arm refuses an off-grid value outright, so snap rather than forward it.
-  const snapped = Math.round(clamped / field.multipleOf) * field.multipleOf;
+  // `min` and `max` are themselves on the grid, which is what keeps the clamp
+  // below from undoing the snap.
+  const { block, offset = 0 } = field.grid;
+  const snapped = offset + Math.round((clamped - offset) / block) * block;
   return Math.min(field.max, Math.max(field.min, snapped));
 }
 
@@ -312,4 +321,32 @@ export function coerceJobValues(spec: JobTypeSpec, values: Record<string, unknow
   }
 
   return result;
+}
+
+/**
+ * The exact body posted to the arm's `/generate`.
+ *
+ * A pure function so it can be asserted against each arm's own validator
+ * without a GPU in the room, and so the console can show what it is about to
+ * ask for. Keys here are the arm's, not this product's.
+ */
+export function buildArmPayload(
+  spec: JobTypeSpec,
+  values: Record<string, unknown>,
+  outPath: string,
+  referencePaths: string[] = [],
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...coerceJobValues(spec, values), outPath };
+
+  // An empty string is a value the arm would have to reject; absent lets its
+  // own default stand.
+  if (!payload['negativePrompt']) delete payload['negativePrompt'];
+
+  const references = spec.references;
+  if (references && referencePaths.length) {
+    const wanted = referencePaths.slice(0, references.max);
+    payload[references.field] = references.shape === 'single' ? wanted[0] : wanted;
+  }
+
+  return payload;
 }

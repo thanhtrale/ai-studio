@@ -82,6 +82,11 @@
       </div>
     </fieldset>
 
+    <details class="rounded-lg border border-white/10 bg-ink-950 p-3">
+      <summary class="cursor-pointer text-xs text-ink-500">Payload gửi tới arm</summary>
+      <pre class="mt-2 overflow-auto font-mono text-[11px] text-ink-200">{{ preview }}</pre>
+    </details>
+
     <p v-if="error" class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
       {{ error }}
     </p>
@@ -107,6 +112,7 @@
 <script setup lang="ts">
 import {
   JOB_TYPES,
+  buildArmPayload,
   coerceJobValues,
   defaultJobValues,
   jobTypeById,
@@ -150,6 +156,21 @@ watch(typeId, () => {
 
 const promptFilled = computed(() => String(values['prompt'] ?? '').trim().length > 0);
 const atReferenceLimit = computed(() => chosen.value.length >= (spec.value.references?.max ?? 0));
+
+// The worker builds the same thing from the same function; the paths differ
+// only because the files are not on this machine yet.
+const preview = computed(() =>
+  JSON.stringify(
+    buildArmPayload(
+      spec.value,
+      values,
+      `cloud/<jobId>.${spec.value.outputExtension}`,
+      chosen.value.map((_, index) => `cloud/<jobId>-${index}.jpg`),
+    ),
+    null,
+    2,
+  ),
+);
 
 function fieldsIn(group: string): JobField[] {
   return spec.value.fields.filter(
