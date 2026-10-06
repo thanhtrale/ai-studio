@@ -10,7 +10,7 @@ import {
   STORAGE_LOG_PREFIX,
   STORAGE_OUTPUT_PREFIX,
   WORKERS_PATH,
-  coerceJobValues,
+  buildArmPayload,
   jobTypeById,
   type CloudGalleryDoc,
   type CloudJobDoc,
@@ -313,7 +313,9 @@ class CloudWorker {
       const referencePaths = await this.#fetchReferences(job, spec, deps.storageDir);
       if (referencePaths.length) record(`tải ${referencePaths.length} ảnh tham chiếu về inputs/cloud/`);
 
-      const armJob = this.#buildArmJob(spec, job, outRelative, referencePaths);
+      // Coerced again inside: the document was written by a browser, and the arm
+      // answers an off-grid value with a 400 rather than a clip.
+      const armJob = buildArmPayload(spec, job.values, outRelative, referencePaths);
       record(`gửi job tới arm ${spec.armId}: ${JSON.stringify(armJob)}`);
 
       const client = this.#client();
@@ -350,29 +352,6 @@ class CloudWorker {
         updatedAt: Date.now(),
       });
     }
-  }
-
-  #buildArmJob(
-    spec: JobTypeSpec,
-    job: CloudJobDoc,
-    outRelative: string,
-    referencePaths: string[],
-  ): Record<string, unknown> {
-    // Coerced again here: the document was written by a browser, and the arm
-    // answers an off-grid value with a 400 rather than a clip.
-    const payload: Record<string, unknown> = {
-      ...coerceJobValues(spec, job.values),
-      outPath: outRelative,
-    };
-
-    // The arm's own field names, not a normalised one: `image` takes a path and
-    // `refImages` takes a positional list.
-    if (spec.references && referencePaths.length) {
-      payload[spec.references.field] =
-        spec.references.shape === 'single' ? referencePaths[0] : referencePaths;
-    }
-
-    return payload;
   }
 
   #pollProgress(
