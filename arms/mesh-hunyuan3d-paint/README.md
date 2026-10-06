@@ -76,9 +76,10 @@ Only one stage is on the card at a time. Both stay in system memory between
 jobs (about 16 GB), and `Engine.place` moves the idle one off before the other
 runs, which is what upstream's `--low_vram_mode` does without the reload.
 
-- **Orientation.** Hunyuan3D's shapes face +X; the GLB is turned −90° about Y
-  so the front faces +Z, as glTF expects. A `meshPath` mesh is turned the other
-  way on the way in.
+- **Orientation.** The photograph's viewpoint comes out at +Z, which is
+  where three.js puts its camera: a front-on character faces +Z, as glTF
+  expects, and anything shot at an angle keeps that angle. Nothing is
+  rotated. (ComfyUI's port of the shape model faces +X instead.)
 - **Bake size.** The texture is baked at twice the delivered size (capped at
   4096) and halved, as upstream bakes 4096 for a 2048 file: the back-projection
   is point sampled, and the halving is its antialiasing.

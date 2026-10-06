@@ -13,6 +13,7 @@ import {
   formatCount,
   isImageSettings,
   isModelSettings,
+  isRigSettings,
   isVideoSettings,
   type MediaItem,
 } from '#shared/library';
@@ -52,12 +53,19 @@ const settings = computed(() => meta.value?.settings);
 const video = computed(() => (isVideoSettings(settings.value) ? settings.value : null));
 const image = computed(() => (isImageSettings(settings.value) ? settings.value : null));
 const model = computed(() => (isModelSettings(settings.value) ? settings.value : null));
+const rig = computed(() => (isRigSettings(settings.value) ? settings.value : null));
 /** The settings that describe a frame -- every kind but a mesh. */
 const framed = computed(() => video.value ?? image.value);
 
 /** Where "use these settings" goes: the console that can actually take them. */
 const consolePath = computed(() =>
-  model.value ? '/generate/model' : image.value ? '/generate/image' : '/generate/video',
+  rig.value
+    ? '/generate/rig'
+    : model.value
+      ? '/generate/model'
+      : image.value
+        ? '/generate/image'
+        : '/generate/video',
 );
 
 const when = (iso: string): string =>
@@ -73,6 +81,8 @@ const features = computed(() => {
   if (model.value && model.value.batch > 1) on.push(`batch ${model.value.batchIndex + 1}/${model.value.batch}`);
   if (model.value?.removeBackground) on.push('background removed');
   if (meta.value?.output?.textured) on.push('textured');
+  if (rig.value?.removeFingers) on.push('fingers folded');
+  if (rig.value?.inPlace) on.push('in place');
   if (model.value?.compressTextures) {
     const quality = model.value.textureQuality ?? 100;
     on.push(quality >= 100 ? 'WebP lossless' : `WebP ${quality}%`);
@@ -214,7 +224,14 @@ const features = computed(() => {
       <section v-if="settings" class="space-y-1">
         <h3 class="text-xs font-medium uppercase tracking-wide text-slate-500">Settings</h3>
         <dl class="space-y-1 text-xs">
-          <div v-if="model?.engine === 'trellis2'" class="flex justify-between gap-3">
+          <div v-if="rig" class="flex justify-between gap-3">
+            <dt class="text-slate-500">Rig</dt>
+            <dd class="text-right text-slate-300">
+              {{ meta?.output?.bones ?? '?' }} bones · Mixamo skeleton<br />
+              {{ rig.clips.length ? rig.clips.join(', ') : 'no clips' }}
+            </dd>
+          </div>
+          <div v-else-if="model?.engine === 'trellis2'" class="flex justify-between gap-3">
             <dt class="text-slate-500">TRELLIS.2</dt>
             <dd class="text-right text-slate-300">
               {{ model.structureSteps }}/{{ model.shapeSteps }}/{{ model.refineSteps }}/{{ model.textureSteps }}
@@ -313,6 +330,9 @@ const features = computed(() => {
           <UiButton size="sm">Make a 3D model</UiButton>
         </NuxtLink>
       </template>
+      <NuxtLink v-if="item.kind === 'model' && !rig" :to="{ path: '/generate/rig', query: { mesh: item.id } }">
+        <UiButton size="sm">Rig &amp; animate</UiButton>
+      </NuxtLink>
       <a v-if="item.kind === 'model'" :href="mediaUrl(item.id)" :download="item.name">
         <UiButton size="sm">Download GLB</UiButton>
       </a>

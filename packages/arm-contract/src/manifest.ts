@@ -24,6 +24,7 @@ export const ARM_CAPABILITIES = [
   'image.generate',
   'video.generate',
   'mesh.generate',
+  'mesh.rig',
   'text.generate',
   'text.vision',
 ] as const;

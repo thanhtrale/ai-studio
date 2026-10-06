@@ -12,6 +12,7 @@ import type {
   MediaItem,
   ModelJobSettings,
   OutputInfo,
+  RigJobSettings,
   VideoJobSettings,
   VideoMode,
 } from './library';
@@ -325,4 +326,34 @@ export interface ArmMeshReport {
 export interface MeshGenerateResponse {
   media: MediaItem[];
   report: ArmMeshReport;
+}
+
+/** A mesh from the library in, the same mesh rigged and animated out. */
+export interface RigGenerateRequest {
+  jobId: string;
+  /** The mesh to rig: a `.glb` in the library. */
+  meshId: string;
+  note?: string;
+  collection?: string;
+  settings: RigJobSettings;
+}
+
+export interface ArmRigReport {
+  seconds_total: number;
+  out_path: string;
+  out_bytes: number;
+  bones: number;
+  vertices: number;
+  faces: number;
+  clips: string[];
+  peak_vram_gib: number;
+  vram_scope: 'process' | 'card' | 'unavailable';
+  texture_bytes_before: number;
+  texture_bytes_after: number;
+  stages: { name: string; seconds: number }[];
+}
+
+export interface RigGenerateResponse {
+  media: MediaItem[];
+  report: ArmRigReport;
 }

@@ -7,6 +7,9 @@
  * "will this file look right on the web", and a nicer viewer would answer a
  * different one.
  *
+ * A rigged GLB plays its clips through an `AnimationMixer`, as a page would:
+ * the first one called Idle, or the first one there is, starts on load.
+ *
  * three.js is imported inside `onMounted`. The page renders on the server first,
  * where there is no WebGL, and the library would otherwise pay for half a
  * megabyte of renderer on every page that never shows a mesh.
@@ -49,6 +52,10 @@ const stats = shallowRef<MeshStats | null>(null);
 const shading = ref<Shading>('original');
 const rotating = ref(props.autoRotate);
 const grid = ref(true);
+/** Clip names in the file, in its own order; empty for a static mesh. */
+const clips = ref<string[]>([]);
+const clip = ref<string | null>(null);
+const playing = ref(true);
 
 const SHADINGS: { value: Shading; label: string }[] = [
   { value: 'original', label: 'Material' },
@@ -69,6 +76,8 @@ let viewer: {
   setGrid: (on: boolean) => void;
   resetView: () => void;
   snapshot: () => string;
+  play: (name: string | null) => void;
+  setPlaying: (on: boolean) => void;
 } | null = null;
 
 async function createViewer(container: HTMLDivElement): Promise<NonNullable<typeof viewer>> {
@@ -111,6 +120,10 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
   const wire = new three.MeshBasicMaterial({ color: 0x818cf8, wireframe: true });
   const originals = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
   let model: THREE.Object3D | null = null;
+  let mixer: THREE.AnimationMixer | null = null;
+  let animations: THREE.AnimationClip[] = [];
+  let action: THREE.AnimationAction | null = null;
+  const clock = new three.Clock();
   let home = { position: new three.Vector3(2, 1.4, 2.6), target: new three.Vector3() };
 
   function resize(): void {
@@ -129,6 +142,8 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
   let frame = 0;
   function tick(): void {
     frame = requestAnimationFrame(tick);
+    const delta = clock.getDelta();
+    if (mixer && playing.value) mixer.update(delta);
     controls.update();
     renderer.render(scene, camera);
   }
@@ -141,6 +156,10 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
   }
 
   function disposeModel(): void {
+    mixer?.stopAllAction();
+    mixer = null;
+    action = null;
+    animations = [];
     if (!model) return;
     scene.remove(model);
     model.traverse((node) => {
@@ -159,7 +178,22 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
     model = null;
   }
 
+  function play(name: string | null): void {
+    if (!mixer) return;
+    const next = animations.find((one) => one.name === name);
+    if (!next) return;
+    const nextAction = mixer.clipAction(next);
+    nextAction.reset().play();
+    // A short blend rather than a cut, as a game would switch states.
+    if (action && action !== nextAction) action.crossFadeTo(nextAction, 0.25, false);
+    action = nextAction;
+  }
+
   return {
+    play,
+    setPlaying(on: boolean): void {
+      if (on) clock.getDelta();
+    },
     async load(url: string): Promise<void> {
       const gltf = await new GLTFLoader().loadAsync(url);
       disposeModel();
@@ -171,6 +205,9 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
       model.traverse((node) => {
         const mesh = node as THREE.Mesh;
         if (!mesh.isMesh) return;
+        // A skinned mesh moves outside the box it was bound in; culling by
+        // that box would make a raised arm vanish at the edge of the frame.
+        if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) mesh.frustumCulled = false;
         const geometry = mesh.geometry;
         vertices += geometry.attributes['position']?.count ?? 0;
         faces += (geometry.index ? geometry.index.count : (geometry.attributes['position']?.count ?? 0)) / 3;
@@ -217,6 +254,12 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
       controls.update();
 
       apply(shading.value);
+      animations = gltf.animations;
+      mixer = animations.length ? new three.AnimationMixer(model) : null;
+      clips.value = animations.map((one) => one.name);
+      const first = clips.value.find((name) => /idle/i.test(name)) ?? clips.value[0] ?? null;
+      clip.value = first;
+      play(first);
       stats.value = { vertices, faces: Math.round(faces), size: [size.x, size.y, size.z], textured };
       emit('stats', stats.value);
     },
@@ -289,6 +332,8 @@ watch(
 watch(shading, (mode) => viewer?.setShading(mode));
 watch(rotating, (on) => viewer?.setRotating(on));
 watch(grid, (on) => viewer?.setGrid(on));
+watch(clip, (name) => viewer?.play(name));
+watch(playing, (on) => viewer?.setPlaying(on));
 
 function resetView(): void {
   viewer?.resetView();
@@ -333,6 +378,16 @@ function download(): void {
         <UiButton size="sm" @click="resetView">Reset</UiButton>
         <UiButton size="sm" title="Save what the viewer shows as a PNG" @click="download">PNG</UiButton>
       </div>
+      <div v-if="clips.length" class="absolute bottom-2 right-2 flex items-center gap-1" data-testid="clips">
+        <select
+          v-model="clip"
+          class="rounded border border-white/10 bg-black/70 px-2 py-1 text-xs text-slate-200"
+          aria-label="Animation clip"
+        >
+          <option v-for="name in clips" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <UiButton size="sm" :active="playing" @click="playing = !playing">{{ playing ? 'Pause' : 'Play' }}</UiButton>
+      </div>
       <div
         v-if="stats"
         class="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 font-mono text-[10px] text-slate-300"
@@ -340,6 +395,7 @@ function download(): void {
         {{ formatCount(stats.faces) }} faces · {{ formatCount(stats.vertices) }} verts
         <template v-if="bytes"> · {{ formatBytes(bytes) }}</template>
         · {{ stats.textured ? 'textured' : 'untextured' }}
+        <template v-if="clips.length"> · {{ clips.length }} clip{{ clips.length === 1 ? '' : 's' }}</template>
       </div>
     </template>
   </div>

@@ -1,0 +1,48 @@
+id: rig-make-it-animatable
+name: Make-It-Animatable v2 humanoid auto-rig
+modality: mesh
+protocol: native
+lifecycle: resident
+capabilities:
+  - mesh.rig
+resources:
+  gpu: exclusive
+  # Three 1 GB networks sharing a Hunyuan3D 2.1 ShapeVAE encoder, run once
+  # each over 32K points; Blender is CPU only.
+  vramEstimateMb: 6000
+launch:
+  cwd: .
+  # This arm's own venv on Python 3.11, which is what Blender's `bpy` 4.3
+  # wheel is built for. See README.md.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_mia"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--hy3d-models"
+    - "{{hy3dModels}}"
+    - "--template"
+    - "{{template}}"
+    - "--clip-dir"
+    - "{{clipDir}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    GRADIO_ANALYTICS_ENABLED: "False"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

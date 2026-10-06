@@ -18,6 +18,7 @@ const NAV = [
   { to: '/generate/image', label: 'Image' },
   { to: '/generate/video', label: 'Video' },
   { to: '/generate/model', label: '3D' },
+  { to: '/generate/rig', label: 'Rig' },
   { to: '/analyze/block', label: 'Analyze' },
   { to: '/library', label: 'Library' },
 ] as const;

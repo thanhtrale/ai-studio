@@ -37,10 +37,13 @@ PAINT_RESOLUTIONS = (512, 768)
 TEXTURE_SIZES = (1024, 2048, 4096)
 RANDOM_SEED_CEILING = 2**31 - 1
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
-#: Hunyuan3D's shapes face +X. glTF, and three.js, face +Z, so a shape is
-#: turned this many degrees about +Y on the way out -- and a mesh brought in
-#: through `meshPath`, already in glTF's frame, the other way on the way in.
-FRONT_YAW = -90.0
+#: Tencent's pipeline puts the photograph's own viewpoint at +Z, which is where
+#: glTF -- and three.js -- put the camera: a character shot from the front
+#: comes out facing +Z, a chair shot at three-quarters comes out at that
+#: three-quarter turn. So nothing is turned. (ComfyUI's port of the same model
+#: faces +X instead; that arm turned it -90 degrees, and this one copied the
+#: turn until a front-on character came out side-on.)
+FRONT_YAW = 0.0
 
 
 class JobError(ValueError):

@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Make-It-Animatable v2 start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hy3dModels": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "A folder holding tencent/Hunyuan3D-2.1/hunyuan3d-vae-v2-1 -- the ShapeVAE the rig networks are built on. A junction to the paint arm's weights.",
+      "default": "cache/hy3dgen"
+    },
+    "template": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "A Mixamo FBX whose armature is the skeleton every rig is built from.",
+      "default": "models/make-it-animatable/data/Mixamo/bones.fbx"
+    },
+    "clipDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Mixamo clips, one FBX each (downloaded for X Bot, without skin). Each file name is the clip's name.",
+      "default": "models/mixamo-clips"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "inputs"
+    },
+    "scratchDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where a job's intermediate files live while it runs.",
+      "default": "cache/rig-mia"
+    }
+  }
+}

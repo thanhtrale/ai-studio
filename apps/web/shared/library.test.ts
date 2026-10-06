@@ -13,9 +13,12 @@ import {
   groupMedia,
   groupOf,
   isMediaId,
+  isRigSettings,
+  isVideoSettings,
   mediaKind,
   mediaSeconds,
   mediaTags,
+  meshEngineLabel,
   recordId,
   sanitiseCollection,
   sanitiseUploadName,
@@ -563,5 +566,56 @@ describe('3D models', () => {
     expect(formatCount(950)).toBe('950');
     expect(formatCount(49_998)).toBe('50K');
     expect(formatCount(1_250_000)).toBe('1.3M');
+  });
+});
+
+describe('rigs', () => {
+  const rigged: MediaItem = {
+    id: 'outputs/2026-10-06/175819-rig-e2e-.glb',
+    name: '175819-rig-e2e-.glb',
+    kind: 'model',
+    group: 'outputs/2026-10-06',
+    bytes: 5_440_000,
+    modifiedAt: '2026-10-06T17:58:19.000Z',
+    meta: {
+      source: 'generated',
+      createdAt: '2026-10-06T17:58:19.000Z',
+      jobId: 'rig-e2e-0002',
+      armId: 'rig-make-it-animatable',
+      referenceId: 'outputs/2026-10-06/173416-apose-me.glb',
+      settings: {
+        kind: 'rig',
+        clips: ['Idle', 'Wave', 'Nod', 'Run'],
+        removeFingers: true,
+        inPlace: true,
+        compressTextures: true,
+        textureQuality: 100,
+        seed: 0,
+        batch: 1,
+        batchIndex: 0,
+      },
+      output: { count: 1, faces: 40_000, vertices: 26_126, bones: 22, clips: ['Idle', 'Wave', 'Nod', 'Run'] },
+    },
+  };
+
+  it('is a rig, not a video or a generated mesh', () => {
+    expect(isRigSettings(rigged.meta?.settings)).toBe(true);
+    expect(isVideoSettings(rigged.meta?.settings)).toBe(false);
+    expect(featureOf(rigged)).toBe('mesh.rig');
+    expect(filterMedia([rigged], { feature: 'mesh.rig' })).toHaveLength(1);
+    expect(filterMedia([rigged], { feature: 'mesh.generate' })).toHaveLength(0);
+  });
+
+  it('is tagged by its arm alone: rigging is neither text- nor image-to-anything', () => {
+    expect(mediaTags(rigged)).toEqual(['mia', 'rig']);
+  });
+
+  it('badges each mesh with the engine that made it', () => {
+    const by = (armId: string): MediaItem => ({ ...rigged, meta: { ...rigged.meta!, armId } });
+    expect(meshEngineLabel(by('mesh-trellis2-comfy'))).toBe('TRELLIS');
+    expect(meshEngineLabel(by('mesh-hunyuan3d-paint'))).toBe('Hunyuan');
+    expect(meshEngineLabel(rigged)).toBe('Rig');
+    expect(meshEngineLabel({ ...rigged, meta: undefined })).toBeNull();
+    expect(meshEngineLabel({ ...by('mesh-trellis2-comfy'), kind: 'image' })).toBeNull();
   });
 });

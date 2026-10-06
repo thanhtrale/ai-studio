@@ -8,7 +8,7 @@
  * why the media route answers range requests -- without them the fragment is
  * ignored and the frame comes out black.
  */
-import type { MediaItem, MediaKind } from '#shared/library';
+import { mediaKind, meshEngineLabel, type MediaItem, type MediaKind } from '#shared/library';
 
 const KIND_LABELS: Record<MediaKind, string> = { image: 'Image', video: 'Video', model: '3D model' };
 const KIND_GLYPHS: Record<MediaKind, string> = { image: '▣', video: '▶', model: '◆' };
@@ -52,8 +52,9 @@ withDefaults(
     <!-- A mesh is shown by the photograph it was made from: a grid of live
          WebGL views would be one context per card, and browsers stop at sixteen. -->
     <template v-else-if="item.kind === 'model'">
+      <!-- A rig's reference is the mesh it rigged, which an <img> cannot show. -->
       <img
-        v-if="item.meta?.referenceId"
+        v-if="item.meta?.referenceId && mediaKind(item.meta.referenceId) === 'image'"
         :src="mediaUrl(item.meta.referenceId)"
         :alt="item.name"
         loading="lazy"
@@ -61,10 +62,15 @@ withDefaults(
         :class="fit === 'cover' ? 'object-cover' : 'object-contain'"
       />
       <span v-else class="flex h-full w-full items-center justify-center text-2xl text-indigo-300/60">◆</span>
-      <span
-        class="absolute bottom-1 right-1 rounded bg-indigo-500/80 px-1.5 py-0.5 text-[10px] font-medium text-white"
-      >
-        3D
+      <span class="absolute bottom-1 right-1 flex gap-1">
+        <span
+          v-if="meshEngineLabel(item)"
+          :title="item.meta?.armId"
+          class="rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-slate-200"
+        >
+          {{ meshEngineLabel(item) }}
+        </span>
+        <span class="rounded bg-indigo-500/80 px-1.5 py-0.5 text-[10px] font-medium text-white">3D</span>
       </span>
     </template>
     <template v-else>

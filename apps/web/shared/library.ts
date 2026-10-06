@@ -233,14 +233,38 @@ export interface ImageJobSettings extends CommonSettings {
   batchIndex: number;
 }
 
-export type JobSettings = VideoJobSettings | ImageJobSettings | ModelJobSettings;
+/**
+ * A mesh made animatable: a Mixamo skeleton, skin weights and clips, put on a
+ * mesh the library already has. That mesh is the record's `referenceId`.
+ */
+export interface RigJobSettings {
+  kind: 'rig';
+  /** Clip names, as the rig arm lists them: built in, or a Mixamo FBX's file name. */
+  clips: string[];
+  /** Fingers folded into the hands, for a mesh whose fingers are fused anyway. */
+  removeFingers: boolean;
+  /** Locomotion clips keep the character on the spot instead of travelling. */
+  inPlace: boolean;
+  compressTextures: boolean;
+  textureQuality: number;
+  /** Not a seed in any useful sense; there so every record has one. */
+  seed: number;
+  batch: number;
+  batchIndex: number;
+}
+
+export type JobSettings = VideoJobSettings | ImageJobSettings | ModelJobSettings | RigJobSettings;
 
 export function isImageSettings(settings: JobSettings | undefined): settings is ImageJobSettings {
   return settings?.kind === 'image';
 }
 
 export function isVideoSettings(settings: JobSettings | undefined): settings is VideoJobSettings {
-  return settings !== undefined && settings.kind !== 'image' && settings.kind !== 'model';
+  return settings !== undefined && settings.kind !== 'image' && settings.kind !== 'model' && settings.kind !== 'rig';
+}
+
+export function isRigSettings(settings: JobSettings | undefined): settings is RigJobSettings {
+  return settings?.kind === 'rig';
 }
 
 export function isModelSettings(settings: JobSettings | undefined): settings is ModelJobSettings {
@@ -263,6 +287,9 @@ export interface OutputInfo {
   faces?: number;
   /** Meshes only: whether the GLB carries texture images. */
   textured?: boolean;
+  /** Rigged meshes only: bones in the skin, and the clips it plays. */
+  bones?: number;
+  clips?: string[];
 }
 
 export interface ReportSummary {
@@ -516,7 +543,24 @@ const ARM_TAGS: Record<string, readonly string[]> = {
   'mesh-hunyuan3d-comfy': ['comfy', 'hunyuan3d2.1'],
   'mesh-trellis2-comfy': ['comfy', 'trellis2'],
   'mesh-hunyuan3d-paint': ['hunyuan3d2.1', 'paint'],
+  'rig-make-it-animatable': ['mia', 'rig'],
 };
+
+/**
+ * Which 3D engine made a mesh, as one word for the badge on its thumbnail.
+ *
+ * The two engines' meshes differ in ways that matter downstream -- a rig
+ * comes out cleaner from Hunyuan3D's closed meshes than from TRELLIS.2's
+ * two-sided shells -- so which is which is worth seeing before opening one.
+ */
+export function meshEngineLabel(item: MediaItem): string | null {
+  if (item.kind !== 'model') return null;
+  const armId = item.meta?.armId ?? '';
+  if (armId.startsWith('mesh-trellis')) return 'TRELLIS';
+  if (armId.startsWith('mesh-hunyuan')) return 'Hunyuan';
+  if (armId.startsWith('rig-')) return 'Rig';
+  return null;
+}
 
 /**
  * The chips under a thumbnail: how a file was made, in comparable words.
@@ -537,6 +581,7 @@ export function mediaTags(item: MediaItem): string[] {
   const feature = featureOf(item);
   if (feature === null) return [...arm];
 
+  if (feature === 'mesh.rig') return [...arm];
   const modality = feature === 'image.generate' ? 'i' : feature === 'mesh.generate' ? '3d' : 'v';
   const conditioned = (meta.referenceIds?.length ?? 0) > 0 || meta.referenceId !== undefined;
   return [...arm, `${conditioned ? 'i' : 't'}2${modality}`];
@@ -580,6 +625,7 @@ export function mediaTime(item: MediaItem): number {
 export function featureOf(item: MediaItem): ArmFeature | null {
   const meta = item.meta;
   if (!meta || meta.source !== 'generated') return null;
+  if (isRigSettings(meta.settings)) return 'mesh.rig';
   if (isModelSettings(meta.settings)) return 'mesh.generate';
   if (meta.settings) return isImageSettings(meta.settings) ? 'image.generate' : 'video.generate';
   // Generated before settings were recorded, or by a script: the file itself is
@@ -589,12 +635,13 @@ export function featureOf(item: MediaItem): ArmFeature | null {
 }
 
 /** The capabilities an arm manifest can declare, as the library sees them. */
-export type ArmFeature = 'image.generate' | 'video.generate' | 'mesh.generate';
+export type ArmFeature = 'image.generate' | 'video.generate' | 'mesh.generate' | 'mesh.rig';
 
 export const FEATURE_LABELS: Record<ArmFeature, string> = {
   'image.generate': 'Image generation',
   'video.generate': 'Video generation',
   'mesh.generate': '3D model generation',
+  'mesh.rig': 'Rigging & animation',
 };
 
 /**
@@ -649,7 +696,12 @@ export function filterMedia(items: readonly MediaItem[], filter: MediaFilter): M
   const source = filter.source;
 
   return items.filter((item) => {
-    if (feature === 'image.generate' || feature === 'video.generate' || feature === 'mesh.generate') {
+    if (
+      feature === 'image.generate' ||
+      feature === 'video.generate' ||
+      feature === 'mesh.generate' ||
+      feature === 'mesh.rig'
+    ) {
       if (featureOf(item) !== feature) return false;
     }
     if (source !== undefined && source !== null && source !== 'all') {
