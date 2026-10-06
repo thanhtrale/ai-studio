@@ -15,8 +15,12 @@ export const ARM_GPU_MODES = ['exclusive', 'none'] as const;
  * arm says here what it can actually be asked to do. An arm that declares
  * nothing is offered nowhere, which is the right answer for a scaffold whose
  * only working endpoint is its health check.
+ *
+ * `text.vision` is images in, text out. It is kept apart from `text.generate`
+ * because the consoles that want each pick the first arm declaring it, and a
+ * small model that reads references is the wrong arm for a long ticket.
  */
-export const ARM_CAPABILITIES = ['image.generate', 'video.generate', 'text.generate'] as const;
+export const ARM_CAPABILITIES = ['image.generate', 'video.generate', 'text.generate', 'text.vision'] as const;
 
 export type ArmModality = (typeof ARM_MODALITIES)[number];
 export type ArmProtocol = (typeof ARM_PROTOCOLS)[number];

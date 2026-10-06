@@ -42,7 +42,10 @@ def main() -> None:
         default=str(DEFAULT_CUSTOM_NODES),
         help="where this arm keeps the MiniMax-H3 Turbo ComfyUI nodes",
     )
-    parser.add_argument("--diffusion-model", required=True, help="MiniMax-H3 Omni-Transformer")
+    parser.add_argument("--diffusion-model", required=True, help="MiniMax-H3 fl2va transformer")
+    parser.add_argument(
+        "--ref2va-model", default="", help="MiniMax-H3 ref2va transformer, for ref2v jobs"
+    )
     parser.add_argument("--text-encoder", required=True, help="Qwen3-VL 32B, H3's encoder")
     parser.add_argument("--video-vae", required=True, help="H3-VisualVAE")
     parser.add_argument("--audio-vae", required=True, help="H3-AudioVAE")
@@ -97,6 +100,7 @@ def main() -> None:
     config = LoadConfig(
         comfy_dir=comfy_dir,
         diffusion_model=Path(args.diffusion_model),
+        ref2va_model=Path(args.ref2va_model) if args.ref2va_model else None,
         text_encoder=Path(args.text_encoder),
         video_vae=Path(args.video_vae),
         audio_vae=Path(args.audio_vae),

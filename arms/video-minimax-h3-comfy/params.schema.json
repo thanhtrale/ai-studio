@@ -10,6 +10,12 @@
       "description": "The H3 Omni-Transformer, loaded by ComfyUI's UNETLoader. This default is the full, un-pruned fl2va checkpoint: the pruned variants drop the AdaLN branches, and a LoRA trained against the full base only reaches them through a runtime re-injection the node has to guess at. fl2va is the checkpoint that serves text-to-video and first/last-frame video; ref2va is a different set of weights.",
       "default": "models/minimax-h3/diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors"
     },
+    "ref2vaModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The ref2va transformer, loaded by the same UNETLoader for ref2v jobs: up to nine reference images the prompt cites as <Picture 1>..<Picture 9>. Not read at start -- an arm without it runs fl2v, and a ref2v job names the missing file. The Turbo LoRA was trained on the fl2va line; on ref2va it is applied the same way and has not been measured.",
+      "default": "models/minimax-h3/diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors"
+    },
     "textEncoder": {
       "type": "string",
       "format": "aistudio-path",

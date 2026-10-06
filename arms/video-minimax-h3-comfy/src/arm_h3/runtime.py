@@ -105,6 +105,9 @@ class LoadConfig:
     custom_nodes_dir: Path
     input_dir: Path
     scratch_dir: Path
+    #: The `ref2va` checkpoint. Optional: an arm without it still runs fl2v,
+    #: and a ref2v job says what is missing rather than failing in ComfyUI.
+    ref2va_model: Path | None = None
     weight_dtype: str = "default"
     text_encoder_device: str = "default"
     lora_mode: str = "bypass"
@@ -133,9 +136,16 @@ class LoadConfig:
         `custom_nodes` is here for the same reason it is not in the ComfyUI
         checkout: the turbo nodes belong to this arm, not to the vendored copy
         of ComfyUI that any arm might share.
+
+        The two transformers may sit in different directories. ComfyUI splits
+        a search path on newlines, so a second directory is a second line
+        rather than a second key.
         """
+        diffusion = [str(self.diffusion_model.parent)]
+        if self.ref2va_model is not None and str(self.ref2va_model.parent) not in diffusion:
+            diffusion.append(str(self.ref2va_model.parent))
         return {
-            "diffusion_models": str(self.diffusion_model.parent),
+            "diffusion_models": "\n".join(diffusion),
             "text_encoders": str(self.text_encoder.parent),
             "vae": str(self.video_vae.parent),
             "loras": str(self.turbo_lora.parent),
@@ -153,7 +163,9 @@ class LoadConfig:
         target = self.scratch_dir / "extra_model_paths.yaml"
         lines = ["# Written by the arm on every start. Edits here are overwritten.", "aistudio:"]
         for key, value in self.model_search_paths().items():
-            escaped = value.replace("\\", "/").replace('"', '\\"')
+            # A double-quoted YAML scalar, so "\n" between two directories is
+            # read back as the newline ComfyUI splits on.
+            escaped = value.replace("\\", "/").replace('"', '\\"').replace("\n", "\\n")
             lines.append(f'  {key}: "{escaped}"')
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return target

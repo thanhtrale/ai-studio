@@ -7,7 +7,7 @@
  * library's business rather than the browser's.
  */
 
-import type { ImageJobSettings, MediaItem, OutputInfo, VideoJobSettings } from './library';
+import type { ImageJobSettings, MediaItem, OutputInfo, VideoJobSettings, VideoMode } from './library';
 
 export interface GenerateRequest {
   /**
@@ -76,13 +76,15 @@ export interface VideoGenerateRequest {
   stylePrompt?: string;
   negativePrompt?: string;
   /**
-   * Media ids under the arm input root, positional: the first is the clip's
-   * first frame and the second its last. Not alternatives, and not a set --
-   * sending one image to end on means sending it in the second slot.
+   * Media ids under the arm input root. In `fl2v` they are positional: the
+   * first is the clip's first frame and the second its last, so sending one
+   * image to end on means sending it in the second slot. In `ref2v` they are
+   * `<Picture 1>` ... `<Picture 9>`, in the order the prompt numbers them.
    */
   referenceIds?: string[];
   /** A folder under `outputs/` to file this run in, instead of today's date. */
   collection?: string;
+  /** Carries `mode` and `refImageSize`, which the route passes to the arm. */
   settings: VideoJobSettings;
   output: OutputInfo;
   armParams?: Record<string, unknown>;
@@ -118,6 +120,56 @@ export interface VideoGenerateResponse {
   /** One entry per file written, in the order the arm produced them. */
   media: MediaItem[];
   report: ArmVideoReport;
+}
+
+/**
+ * Ask a vision-language arm to rewrite a MiniMax-H3 prompt.
+ *
+ * Its own request rather than a flag on the generate one: the rewrite runs on
+ * a different arm, the user reads and edits what comes back before anything
+ * is sampled, and a clip is minutes -- too long to spend on a prompt nobody
+ * has seen.
+ */
+export interface VideoEnhanceRequest {
+  /** Browser-chosen, so the console can follow the rewrite on its timeline. */
+  jobId: string;
+  mode: VideoMode;
+  /** The prompt as it stands. May be empty when the note and images are enough. */
+  prompt: string;
+  /** What the user wants changed. May be empty: then the rewrite only reshapes. */
+  comment: string;
+  /** Media ids, in the same order the generate request will send them. */
+  referenceIds?: string[];
+  /** The clip as it will be asked for, so the rewrite's timeline adds up. */
+  seconds: number;
+  width: number;
+  height: number;
+  /** Which `text.vision` arm to use. The first one discovered when absent. */
+  armId?: string;
+}
+
+export interface VideoEnhanceResponse {
+  prompt: string;
+  armId: string;
+  /** Seconds the rewrite took, including any model swap the supervisor made. */
+  secondsTotal: number;
+  /**
+   * `<Picture N>` tags in a ref2v rewrite that have no image behind them. The
+   * console says so rather than letting a clip be sampled against nothing.
+   */
+  danglingTags: number[];
+  /**
+   * Dialogue the user put in double quotes that the rewrite does not carry
+   * word for word -- translated, reworded or dropped. Quoted lines are kept
+   * verbatim by rule, and this is the check that the rule held.
+   */
+  missingQuotes: string[];
+  /**
+   * Sections of H3's prompt format the rewrite left out: the three fl2v
+   * fields, or the six ref2v ones. A prompt missing one is not the format
+   * the model was trained on.
+   */
+  missingSections: string[];
 }
 
 /**

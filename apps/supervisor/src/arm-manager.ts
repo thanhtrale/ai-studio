@@ -74,6 +74,22 @@ export interface ArmManagerDeps {
 
 const HEALTH_REQUEST_TIMEOUT_MS = 2000;
 
+/**
+ * Why an arm never started, in words that say what to do about it.
+ *
+ * ENOENT is by far the common case: every arm names its own interpreter or
+ * binary inside its directory, and those are git-ignored, so a freshly added
+ * arm is discovered long before anyone has installed it.
+ */
+function describeSpawnFailure(runtime: ArmRuntime, exit: ExitInfo): string {
+  const command = runtime.arm.manifest.launch.command;
+  const code = (exit.error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ENOENT') {
+    return `could not start arm "${runtime.arm.id}": ${command} is not there -- install the arm first (see arms/${path.basename(runtime.arm.dir)}/README.md)`;
+  }
+  return `could not start arm "${runtime.arm.id}": ${exit.error?.message ?? 'the process did not start'}`;
+}
+
 export class ArmManager {
   readonly #config: SupervisorConfig;
   readonly #deps: Required<Omit<ArmManagerDeps, 'policy'>> & { policy: EvictionPolicy };
@@ -416,6 +432,15 @@ export class ArmManager {
       return this.#fail(runtime, 'launch_failed', `could not launch arm: ${(error as Error).message}`);
     }
 
+    // No pid means the OS never started it -- most often an arm whose own
+    // interpreter has not been installed yet. Said now, with the reason, rather
+    // than registering a process that does not exist and timing out on it.
+    if (launched.pid < 0) {
+      const exit = await launched.exited;
+      this.#ports.release(port);
+      return this.#fail(runtime, 'launch_failed', describeSpawnFailure(runtime, exit));
+    }
+
     runtime.process = launched;
     runtime.pid = launched.pid;
 
@@ -500,9 +525,12 @@ export class ArmManager {
 
     while (this.#deps.now() < deadline) {
       if (exit !== null) {
+        const info = exit as ExitInfo;
         throw new ArmControlError(
           'launch_failed',
-          `arm exited during startup with code ${(exit as ExitInfo).code}: ${launched.recentOutput().slice(-500)}`,
+          info.error
+            ? describeSpawnFailure(runtime, info)
+            : `arm exited during startup with code ${info.code}: ${launched.recentOutput().slice(-500)}`,
         );
       }
 
@@ -612,6 +640,7 @@ export class ArmManager {
     });
 
     const exit = await launched.exited;
+    if (exit.error) throw new ArmControlError('launch_failed', describeSpawnFailure(runtime, exit));
     return { exitCode: exit.code, output: launched.recentOutput() };
   }
 

@@ -30,6 +30,8 @@ def parse(body: dict, roots: tuple[Path, Path]):
 def test_the_defaults_are_the_model_s_native_canvas(roots: tuple[Path, Path]) -> None:
     job = parse({}, roots)
 
+    assert job.mode == "fl2v"
+    assert job.ref_image_size == "match"
     assert (job.width, job.height) == (1344, 768)
     assert (job.num_frames, job.steps, job.batch) == (124, 6, 1)
     assert job.scheduler == "simple"
@@ -125,3 +127,42 @@ def test_a_batch_suffixes_everything_after_the_first(roots: tuple[Path, Path]) -
         out_dir / "day" / "a-2.mp4",
         out_dir / "day" / "a-3.mp4",
     ]
+
+
+def _images(roots: tuple[Path, Path], count: int) -> list[str]:
+    names = [f"ref{index}.png" for index in range(count)]
+    for name in names:
+        (roots[1] / name).write_bytes(b"png")
+    return names
+
+
+def test_ref2v_takes_several_references_in_order(roots: tuple[Path, Path]) -> None:
+    names = _images(roots, 4)
+    job = parse({"mode": "ref2v", "refImages": names, "refImageSize": "max"}, roots)
+
+    assert job.mode == "ref2v"
+    assert job.keyframes == names
+    assert job.ref_image_size == "max"
+
+
+def test_three_images_in_fl2v_point_at_ref2v(roots: tuple[Path, Path]) -> None:
+    with pytest.raises(JobError, match="several references are ref2v"):
+        parse({"refImages": _images(roots, 3)}, roots)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ({"mode": "ref2v"}, "at least one reference image"),
+        ({"mode": "t2v"}, "mode must be one of"),
+        ({"refImageSize": "huge"}, "refImageSize must be one of"),
+    ],
+)
+def test_bad_modes_are_named(roots: tuple[Path, Path], body: dict, message: str) -> None:
+    with pytest.raises(JobError, match=message):
+        parse(body, roots)
+
+
+def test_ref2v_stops_at_nine(roots: tuple[Path, Path]) -> None:
+    with pytest.raises(JobError, match="at most 9 reference images"):
+        parse({"mode": "ref2v", "refImages": _images(roots, 10)}, roots)

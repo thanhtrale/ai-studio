@@ -139,7 +139,17 @@ export interface VideoJobSettings extends CommonSettings {
   batch?: number;
   /** Which of them this file is, zero-based. */
   batchIndex?: number;
+  /**
+   * Which task the MiniMax-H3 arm ran: `fl2v` reads the references as a first
+   * and a last frame, `ref2v` as `<Picture i>` stills the prompt cites. Absent
+   * on records from before there was a choice, which were all `fl2v`.
+   */
+  mode?: VideoMode;
+  /** How `ref2v` sized its references: the clip's own area, or a 2048 edge. */
+  refImageSize?: 'match' | 'max';
 }
+
+export type VideoMode = 'fl2v' | 'ref2v';
 
 export interface ImageJobSettings extends CommonSettings {
   kind: 'image';

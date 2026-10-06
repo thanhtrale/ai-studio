@@ -163,3 +163,52 @@ def test_the_container_is_named_rather_than_left_to_auto() -> None:
     # without `format` at all.
     assert graph["save"]["inputs"]["format"] == graph_module.OUTPUT_FORMAT
     assert graph["save"]["inputs"]["format.codec"] == "auto"
+
+
+def ref_models() -> Models:
+    return Models(**{**vars(models()), "ref_unet": "minimax_h3_ref2va_int8_convrot.safetensors"})
+
+
+def test_ref2v_loads_the_ref2va_weights_under_the_reference_node() -> None:
+    graph = build(ref_models(), sampling(mode="ref2v", keyframes=["a.png", "b.png", "c.png"]), "x")
+
+    assert graph["unet"]["inputs"]["unet_name"] == "minimax_h3_ref2va_int8_convrot.safetensors"
+    assert graph["cond"]["class_type"] == "MiniMaxH3ReferenceToVideo"
+    inputs = graph["cond"]["inputs"]
+    # Autogrow slots, spelled as their dotted path under the group: the only
+    # spelling ComfyUI turns back into the dict the node receives.
+    assert inputs["ref_images.ref_image_0"] == ["reference0", 0]
+    assert inputs["ref_images.ref_image_2"] == ["reference2", 0]
+    assert "ref_images.ref_image_3" not in inputs
+    assert inputs["ref_image_size"] == "match"
+    assert inputs["audio_vae"] == ["audio_vae", 0]
+    # No first or last frame: a reference is cited, not started on.
+    assert "first_frame" not in inputs
+    assert graph["reference1"] == {"class_type": "LoadImage", "inputs": {"image": "b.png"}}
+    assert not any(key.startswith("keyframe") for key in graph)
+
+
+def test_ref2v_shares_everything_downstream_of_the_conditioning() -> None:
+    fl2v = build(ref_models(), sampling(keyframes=["a.png"]), "x")
+    ref2v = build(ref_models(), sampling(mode="ref2v", keyframes=["a.png"]), "x")
+
+    for node in ("lora", "shift", "guider", "sampler_select", "sigmas", "sampler", "decode_audio", "save"):
+        assert fl2v[node] == ref2v[node]
+    # fl2v still loads fl2va even when a ref2va checkpoint is configured.
+    assert fl2v["unet"]["inputs"]["unet_name"] == "minimax_h3_fl2va_int8_convrot.safetensors"
+
+
+def test_ref2v_without_its_checkpoint_is_refused() -> None:
+    with pytest.raises(ValueError, match="ref2va checkpoint"):
+        build(models(), sampling(mode="ref2v", keyframes=["a.png"]), "x")
+
+
+def test_ref2v_takes_nine_references_and_no_more() -> None:
+    build(ref_models(), sampling(mode="ref2v", keyframes=[f"{i}.png" for i in range(9)]), "x")
+    with pytest.raises(ValueError, match="at most 9 reference images"):
+        build(ref_models(), sampling(mode="ref2v", keyframes=[f"{i}.png" for i in range(10)]), "x")
+
+
+def test_an_unknown_mode_is_refused() -> None:
+    with pytest.raises(ValueError, match="mode must be one of"):
+        build(models(), sampling(mode="t2v"), "x")

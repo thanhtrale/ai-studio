@@ -106,6 +106,35 @@ describe('ArmManager start', () => {
     expect(stateOf(manager, 'text-fake')).toBe('failed');
   });
 
+  it('fails cleanly, naming what to install, when the arm command is not there', async () => {
+    const root = await makeTempRoot();
+    await writeArms(path.join(root, 'arms'), [residentFixture('text-fake')]);
+    const harness = createHarness();
+    const missing = Object.assign(new Error('spawn fake-arm ENOENT'), { code: 'ENOENT' });
+    const manager = new ArmManager(makeConfig(root), {
+      launch: () => ({
+        pid: -1,
+        child: undefined as never,
+        exited: Promise.resolve({ code: null, signal: null, error: missing }),
+        recentOutput: () => '',
+      }),
+      terminateTree: harness.terminateTree,
+      processExists: harness.processExists,
+      fetch: harness.fetch,
+      inspector: harness.inspector,
+      healthIntervalMs: 5,
+    });
+    await manager.init();
+
+    await expect(manager.start('text-fake')).rejects.toMatchObject({
+      code: 'launch_failed',
+      message: expect.stringMatching(/fake-arm is not there -- install the arm first/),
+    });
+    expect(stateOf(manager, 'text-fake')).toBe('failed');
+    // Nothing was started, so nothing is recorded or killed.
+    expect(harness.terminations).toEqual([]);
+  });
+
   it('is a no-op when the arm is already running', async () => {
     const { manager, harness } = await setup([residentFixture('text-fake')]);
 

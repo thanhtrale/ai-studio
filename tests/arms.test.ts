@@ -23,8 +23,8 @@ describe('scaffolded arm packages', () => {
         'text-llamacpp-cu124',
         'image-qwen-edit-comfy',
         'image-qwen21-turbo-comfy',
-        'video-ltx25-diffusers',
         'video-minimax-h3-comfy',
+        'text-qwen3vl-8b-llamacpp',
       ]),
     );
   });
@@ -82,8 +82,8 @@ describe('scaffolded arm packages', () => {
   it.each([
     ['image-qwen-edit-comfy', ['image.generate']],
     ['image-qwen21-turbo-comfy', ['image.generate']],
-    ['video-ltx25-diffusers', ['video.generate']],
     ['video-minimax-h3-comfy', ['video.generate']],
+    ['text-qwen3vl-8b-llamacpp', ['text.vision']],
     ['text-llamacpp-cu124', []],
   ])('%s declares the job contracts it can actually serve', (name, expected) => {
     const result = parseArmManifestYaml(readFileSync(path.join(ARMS_DIR, name, 'arm.yaml'), 'utf8'));

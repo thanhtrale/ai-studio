@@ -126,6 +126,16 @@ capabilities: [text.generate]
       expect(result.manifest.capabilities).toEqual(['text.generate']);
     });
 
+    it('keeps text.vision on a text arm, beside or instead of text.generate', () => {
+      const result = parseArmManifestYaml(`${RESIDENT_EXAMPLE}
+capabilities: [text.vision]
+`);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.manifest.capabilities).toEqual(['text.vision']);
+    });
+
     it('rejects text.generate on an arm of another modality', () => {
       const result = parseArmManifestYaml(`${RESIDENT_EXAMPLE.replace('modality: text', 'modality: image')}
 capabilities: [text.generate]

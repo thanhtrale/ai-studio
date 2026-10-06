@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import graph as graph_module
-from .graph import MAX_KEYFRAMES, Models, Sampling
+from .graph import MAX_KEYFRAMES, MAX_REFERENCES, Models, Sampling
 from .progress import JobProgress
 from .runtime import ChildFailed, ComfyServer
 
@@ -80,6 +80,10 @@ class Job:
     shift_video: float = graph_module.DEFAULT_SHIFT_VIDEO
     shift_audio: float = graph_module.DEFAULT_SHIFT_AUDIO
     keyframes: list[str] = field(default_factory=list)
+    #: `fl2v` reads `keyframes` as a first and a last frame; `ref2v` reads them
+    #: as `<Picture 1>` ... references the prompt cites.
+    mode: str = graph_module.DEFAULT_MODE
+    ref_image_size: str = graph_module.DEFAULT_REF_IMAGE_SIZE
 
 
 @dataclass
@@ -104,10 +108,12 @@ class GenerationReport:
     peak_vram_gib: float
     vram_scope: str
     stages: list[dict[str, Any]]
+    mode: str = graph_module.DEFAULT_MODE
     #: Always the prompt as submitted. H3's own rewriter, H3-Context-IR, is a
-    #: hosted service rather than part of the open release, so nothing here
-    #: rewrites anything -- but the field is reported so the library's record
-    #: reads the same across arms.
+    #: hosted service rather than part of the open release; the studio's
+    #: enhancer runs on a separate arm before the job is sent, so by the time a
+    #: prompt arrives here it is final. Reported so the library's record reads
+    #: the same across arms.
     prompt_used: str | None = None
 
 
@@ -174,20 +180,33 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
     if out_path.suffix.lower() != f".{OUTPUT_FORMAT}":
         raise JobError(f"outPath must end in .{OUTPUT_FORMAT}")
 
+    mode = body.get("mode") or graph_module.DEFAULT_MODE
+    if mode not in graph_module.MODES:
+        raise JobError(f"mode must be one of {', '.join(graph_module.MODES)}")
+
+    ref_image_size = body.get("refImageSize") or graph_module.DEFAULT_REF_IMAGE_SIZE
+    if ref_image_size not in graph_module.REF_IMAGE_SIZES:
+        raise JobError(f"refImageSize must be one of {', '.join(graph_module.REF_IMAGE_SIZES)}")
+
     # `image` is the single-keyframe spelling the LTX arm takes, kept so a
     # caller that only knows that one still works. `refImages` is the image
-    # console's, and here it is positional: first frame, then last frame.
+    # console's. In fl2v it is positional -- first frame, then last frame; in
+    # ref2v it is the order the prompt numbers its `<Picture i>` tags in.
     raw_refs = body.get("refImages")
     if raw_refs is None:
         single = body.get("image")
         raw_refs = [single] if isinstance(single, str) and single else []
     if not isinstance(raw_refs, list):
         raise JobError("refImages must be a list")
-    if len(raw_refs) > MAX_KEYFRAMES:
+    if mode == "fl2v" and len(raw_refs) > MAX_KEYFRAMES:
         raise JobError(
             f"at most {MAX_KEYFRAMES} keyframes -- the fl2va checkpoint takes a first "
-            "frame and a last frame, and nothing between them"
+            "frame and a last frame, and nothing between them; several references are ref2v"
         )
+    if mode == "ref2v" and not raw_refs:
+        raise JobError("ref2v needs at least one reference image -- with none, it is fl2v")
+    if mode == "ref2v" and len(raw_refs) > MAX_REFERENCES:
+        raise JobError(f"at most {MAX_REFERENCES} reference images in ref2v")
 
     keyframes: list[str] = []
     for entry in raw_refs:
@@ -195,7 +214,7 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
             raise JobError("every keyframe must be a path")
         resolved = _inside(in_dir, entry, "refImages")
         if not resolved.is_file():
-            raise JobError(f"keyframe {entry} is not there")
+            raise JobError(f"{'reference' if mode == 'ref2v' else 'keyframe'} {entry} is not there")
         keyframes.append(resolved.relative_to(in_dir.resolve()).as_posix())
 
     requested_frames = _int(body, "numFrames", graph_module.frames_for_seconds(5), 5, MAX_FRAMES)
@@ -217,6 +236,8 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
         shift_video=_float(body, "flowShift", graph_module.DEFAULT_SHIFT_VIDEO, 0.01, 100.0),
         shift_audio=_float(body, "audioShift", graph_module.DEFAULT_SHIFT_AUDIO, 0.01, 100.0),
         keyframes=keyframes,
+        mode=mode,
+        ref_image_size=ref_image_size,
     )
 
 
@@ -348,7 +369,9 @@ def generate(server: ComfyServer, models: Models, job: Job, progress: JobProgres
     detail = f"{job.width}×{job.height} · {job.num_frames} frames ({seconds:.2f}s) · {job.steps} step"
     if job.batch > 1:
         detail += f" · ×{job.batch}"
-    if job.keyframes:
+    if job.mode == "ref2v":
+        detail += f" · ref2v, {len(job.keyframes)} reference{'' if len(job.keyframes) == 1 else 's'}"
+    elif job.keyframes:
         detail += " · first frame" if len(job.keyframes) == 1 else " · first and last frame"
 
     seeds = seeds_for(job)
@@ -376,6 +399,8 @@ def generate(server: ComfyServer, models: Models, job: Job, progress: JobProgres
                 shift_video=job.shift_video,
                 shift_audio=job.shift_audio,
                 keyframes=job.keyframes,
+                mode=job.mode,
+                ref_image_size=job.ref_image_size,
             )
 
             server.begin_scan(
@@ -410,5 +435,6 @@ def generate(server: ComfyServer, models: Models, job: Job, progress: JobProgres
         peak_vram_gib=progress.peak_gib,
         vram_scope="unavailable",
         stages=_stages(progress),
+        mode=job.mode,
         prompt_used=job.prompt,
     )

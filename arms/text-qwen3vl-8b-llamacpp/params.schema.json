@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Qwen3-VL 8B Instruct (llama.cpp) start parameters",
+  "description": "Start-time configuration only. These values are substituted into the launch command and decide how the child process places its weights, so changing any of them restarts the arm. Per-job values (the system prompt, the prompt, the images, max tokens, sampling) are sent to the running arm as a job and are validated by the arm itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen3-vl-8b/Qwen3VL-8B-Instruct-Q8_0.gguf",
+      "description": "The GGUF, relative to the managed storage directory. Qwen's own Q8_0 conversion: at 8B the 4-bit files save four gigabytes the card does not need saved, and a prompt rewriter is judged on its wording."
+    },
+    "mmproj": {
+      "type": "string",
+      "format": "aistudio-path",
+      "default": "models/qwen3-vl-8b/mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+      "description": "The vision projector, relative to the managed storage directory. Always loaded: reading the reference images is what this arm is for."
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's images are confined to. The same root the image and video arms read their references from, so one media id names the same file to all of them.",
+      "default": "inputs"
+    },
+    "contextSize": {
+      "type": "integer",
+      "minimum": 4096,
+      "maximum": 262144,
+      "default": 16384,
+      "description": "Tokens of context the child reserves up front. An image costs roughly a thousand tokens at the projector's default resolution, so 16384 holds nine references, the instructions and the answer with room to spare. About 144 KiB per token at f16."
+    },
+    "gpuLayers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 999,
+      "default": 999,
+      "description": "Layers on the card. 999 is all of them, which a dense 8B model at Q8_0 fits on a 16 GiB card."
+    },
+    "flashAttention": {
+      "type": "string",
+      "enum": ["auto", "on", "off"],
+      "default": "auto",
+      "description": "The child's --flash-attn. auto enables it where the backend supports it."
+    },
+    "threads": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 128,
+      "default": -1,
+      "description": "CPU threads. -1 lets the child choose. With every layer on the card this barely matters."
+    },
+    "kvCacheType": {
+      "type": "string",
+      "enum": ["f16", "bf16", "q8_0", "q4_0"],
+      "default": "f16",
+      "description": "Data type of the KV cache, for both K and V. q8_0 halves it, for when a longer context is wanted on the same card."
+    }
+  }
+}

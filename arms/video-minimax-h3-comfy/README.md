@@ -51,16 +51,50 @@ quantisation and casting it again would quantise it twice.
 | Steps | 8, fixed schedule | 4–8, `BasicScheduler` on `simple` |
 | Frame grid | `8n+1`, any fps | `17k+5` at 24 fps |
 | Spatial grid | 32 | 32 |
-| Keyframes | first frame | first frame, last frame, or both |
+| Keyframes | first frame | fl2v: first, last or both · ref2v: up to 9 references |
 | Batch | one clip | up to 16, each its own seed and file |
 | Upsamplers | spatial, temporal | none (2K is a hosted service) |
-| Prompt enhancer | Gemma rewrites the caption | none |
+| Prompt enhancer | Gemma rewrites the caption | Qwen3-VL 8B, on its own arm, before the job |
 
-There is no prompt enhancer here on purpose. H3's rewriter is **H3-Context-IR**,
-a hosted multi-stage system that is explicitly not part of the open release, and
-inventing a local substitute would produce prompts in a style the model was not
-conditioned on. `prompt_used` is reported anyway, as the prompt submitted, so
-the library's record reads the same across arms.
+## Two modes
+
+| | `fl2v` (default) | `ref2v` |
+| --- | --- | --- |
+| Checkpoint | `diffusionModel` (fl2va) | `ref2vaModel` (ref2va) |
+| Conditioning node | `MiniMaxH3ImageToVideo` | `MiniMaxH3ReferenceToVideo` |
+| `refImages` | 0–2, positional: first frame, last frame | 1–9, cited in the prompt as `<Picture 1>`… |
+| Extra job field | — | `refImageSize`: `match` (default) or `max` |
+
+A job says `"mode": "ref2v"`; anything else, or nothing, is fl2v. Everything
+downstream of the conditioning node — LoRA, shift, sampler, both decoders — is
+the same graph. The two checkpoints are loaded by the same `UNETLoader` by
+name, so switching modes is not an arm restart; ComfyUI swaps the transformer
+in and out of RAM.
+
+`ref2vaModel` is not read at start. An arm without the file still runs fl2v,
+and a ref2v job is refused with the missing path before ComfyUI is started.
+
+**The Turbo LoRA on ref2va is unmeasured.** Its README describes the fl2va line
+only. It is applied the same way here; if ref2v output is visibly worse at six
+steps, that is the first suspect.
+
+## The prompt enhancer
+
+H3's own rewriter, **H3-Context-IR**, is a hosted multi-stage system and not
+part of the open release, and this arm still rewrites nothing. The studio's
+enhancer runs **before** the job, on a separate arm:
+[`text-qwen3vl-8b-llamacpp`](../text-qwen3vl-8b-llamacpp). The video console
+sends it the user's note, the draft prompt and the reference images; the
+instructions (in `apps/web/server/enhance/h3.ts`) ask for the shape H3's own
+example prompts take — a look paragraph, a `Timeline:` of `[0s-2s]` shots, a
+camera line, an `Audio:` line, a constraints line — with `<Picture i>` tags in
+ref2v. The user reads the result in the prompt box before generating.
+
+H3's own encoder cannot do this job: the repack is truncated at layer 50, so
+there is no head left to generate text with.
+
+`prompt_used` is reported as the prompt submitted, so the library's record
+reads the same across arms.
 
 ## The graph
 
@@ -71,6 +105,7 @@ first principles.
 UNETLoader ─ MiniMaxH3TurboLoRA ─ MiniMaxH3SigmaShift ─┬ BasicGuider ────────┐
                                                        └ BasicScheduler ───┐ │
 CLIPLoader ──┬ MiniMaxH3ImageToVideo ─┬ (positive) ────────────────────────┘ │
+             │  (ref2v: MiniMaxH3ReferenceToVideo, ref_images.ref_image_N)  │
 VAELoader ───┘  ▲                     └ (packed AV latent) ──────────────────┤
 (video)      LoadImage  (first_frame / last_frame)       RandomNoise ────────┤
                                                 MiniMaxH3TurboSampler ──────┤
@@ -147,6 +182,7 @@ Relative to managed storage, and matching the defaults in
 | Parameter | Default | Size |
 | --- | --- | --- |
 | `diffusionModel` | `models/minimax-h3/diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors` | 31.70 GiB |
+| `ref2vaModel` | `models/minimax-h3/diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors` | not yet downloaded |
 | `textEncoder` | `models/minimax-h3/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 25.28 GiB |
 | `videoVae` | `models/minimax-h3/vae/minimax_h3_video_vae_fp16.safetensors` | 4.85 GiB |
 | `audioVae` | `models/minimax-h3/vae/minimax_h3_audio_vae_fp32.safetensors` | 0.56 GiB |
@@ -162,6 +198,11 @@ hf download Comfy-Org/MiniMax-H3 --local-dir $MODELS `
             "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors" `
             "vae/minimax_h3_video_vae_fp16.safetensors" `
             "vae/minimax_h3_audio_vae_fp32.safetensors"
+
+# ref2v only. Check the exact name in the repository first; if it differs,
+# set ref2vaModel to it.
+hf download Comfy-Org/MiniMax-H3 --local-dir $MODELS `
+  --include "diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors"
 
 hf download larryvrh/MiniMax-H3-Turbo-Lora --local-dir "$MODELS\loras" `
   --include "minimax_h3_turbo_v4_step600_ema.safetensors"

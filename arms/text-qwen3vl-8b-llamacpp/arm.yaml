@@ -1,0 +1,62 @@
+id: text-qwen3vl-8b-llamacpp
+name: Qwen3-VL 8B Instruct (llama.cpp, vision)
+modality: text
+protocol: native
+# Resident: a rewrite is asked for several times while a prompt is being
+# worked on, and a job in the same configuration is brokered onto the loaded
+# child rather than reading the weights again.
+lifecycle: resident
+# Images in, text out. Deliberately not `text.generate`: the requirements
+# analysis picks the first arm declaring that, and a dense 8B model is the
+# wrong one to hand a sixty-thousand-token ticket. The video console's prompt
+# enhancer is what looks for this capability.
+capabilities:
+  - text.vision
+
+resources:
+  gpu: exclusive
+  # Measured on 2026-10-05, RTX 4080 16 GiB, default parameters (Q8_0, F16
+  # projector, 16k context, f16 KV), during a rewrite with one 1024x1536
+  # reference image: whole-card peak 12315 MiB with the desktop holding 308
+  # MiB of it. The whole card rather than this arm's share -- a GeForce card
+  # under Windows will not attribute memory per process.
+  vramEstimateMb: 12100
+
+launch:
+  cwd: .
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen3vl"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--model"
+    - "{{model}}"
+    - "--mmproj"
+    - "{{mmproj}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--ctx-size"
+    - "{{contextSize}}"
+    - "--gpu-layers"
+    - "{{gpuLayers}}"
+    - "--flash-attn"
+    - "{{flashAttention}}"
+    - "--threads"
+    - "{{threads}}"
+    - "--kv-cache-type"
+    - "{{kvCacheType}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+
+health:
+  type: http
+  # The arm binds and answers before the child is started, so this covers
+  # process start only. Reading the weights happens on the first job.
+  path: /healthz
+  timeoutMs: 60000
+
+params: ./params.schema.json

@@ -188,3 +188,63 @@ def test_the_search_paths_cover_both_vaes_and_the_node(tmp_path: Path) -> None:
     assert f'vae: "{models}"' in written
     assert f'loras: "{models}"' in written
     assert f'custom_nodes: "{nodes}"' in written
+
+
+def test_ref2v_reaches_the_graph_on_its_own_checkpoint(tmp_path: Path) -> None:
+    config = config_for(tmp_path)
+    config.ref2va_model = tmp_path / "models" / "minimax_h3_ref2va_int8_convrot.safetensors"
+    config.ref2va_model.write_bytes(b"weights")
+    out_dir, in_dir = tmp_path / "outputs", tmp_path / "inputs"
+    out_dir.mkdir()
+    in_dir.mkdir()
+    (in_dir / "hero.png").write_bytes(b"png")
+    (in_dir / "room.png").write_bytes(b"png")
+    state = ArmState(config, out_dir, in_dir)
+    try:
+        report = state.run(
+            {
+                "jobId": "job-ref",
+                "prompt": "<Picture 1> walks into <Picture 2>",
+                "outPath": "r.mp4",
+                "mode": "ref2v",
+                "refImages": ["hero.png", "room.png"],
+            }
+        )
+        graph = state.server.get("/aistudio-test/submitted")["graphs"][-1]
+    finally:
+        state.shutdown()
+
+    assert report["mode"] == "ref2v"
+    assert graph["unet"]["inputs"]["unet_name"] == "minimax_h3_ref2va_int8_convrot.safetensors"
+    assert graph["cond"]["class_type"] == "MiniMaxH3ReferenceToVideo"
+    assert graph["reference1"]["inputs"]["image"] == "room.png"
+
+
+def test_ref2v_without_the_checkpoint_never_starts_comfy(arm: ArmState, tmp_path: Path) -> None:
+    (tmp_path / "inputs" / "hero.png").write_bytes(b"png")
+
+    with pytest.raises(ChildFailed, match="ref2va"):
+        arm.run(
+            {
+                "jobId": "job-ref-missing",
+                "prompt": "<Picture 1> waves",
+                "outPath": "m.mp4",
+                "mode": "ref2v",
+                "refImages": ["hero.png"],
+            }
+        )
+    assert arm.server.pid is None
+
+
+def test_a_ref2va_checkpoint_elsewhere_is_a_second_search_path(tmp_path: Path) -> None:
+    config = config_for(tmp_path)
+    config.ref2va_model = tmp_path / "elsewhere" / "minimax_h3_ref2va_int8_convrot.safetensors"
+    config.scratch_dir.mkdir(parents=True, exist_ok=True)
+
+    written = config.write_model_paths().read_text(encoding="utf-8")
+
+    models = str(tmp_path / "models").replace("\\", "/")
+    elsewhere = str(tmp_path / "elsewhere").replace("\\", "/")
+    # One key, two lines once YAML has read the escape: ComfyUI splits a search
+    # path on newlines.
+    assert f'diffusion_models: "{models}\\n{elsewhere}"' in written

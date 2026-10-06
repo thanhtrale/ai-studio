@@ -1,14 +1,15 @@
-"""Loopback HTTP server for the MiniMax-H3 turbo arm.
+"""Loopback HTTP server for the Qwen3-VL arm.
 
-The contract is the studio's, not ComfyUI's: `/healthz`, `/generate`,
-`/progress`, `/stats`. Translating between the two is the whole job of this
-arm, and keeping the translation here means the supervisor stays ignorant of
-what a node graph is -- which is what lets the next arm be something else
-entirely.
+The contract is the studio's, not llama.cpp's: `/healthz`, `/generate`,
+`/progress`, `/stats`. The child speaks the OpenAI shape and could have been
+relayed as-is, but then the supervisor would need to know what a chat
+completion is, which job it is polling, and how to turn a stream into a
+timeline -- all of which is this arm's business, and none of it the next
+arm's.
 
-The child is started on the first job rather than at startup: a health check
-gated on thirty-four gigabytes coming off NVMe would time out, and a started
-arm is meant to be reachable, not warm.
+The child is started on the first job rather than at startup. `llama-server`
+reads the whole model before it answers, and a started arm is meant to be
+reachable, not warm.
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ from typing import Any
 
 from . import __version__, vram
 from .generation import JobError, generate, parse_job
-from .graph import Models
 from .progress import JobProgress
-from .runtime import ChildFailed, ComfyServer, LoadConfig
+from .runtime import ChildFailed, LlamaServer, LoadConfig
 
-ARM_ID = "video-minimax-h3-comfy"
-# Keyframes arrive as paths, not bytes, so a job body stays small.
-MAX_BODY_BYTES = 256 * 1024
+ARM_ID = "text-qwen3vl-8b-llamacpp"
+# A conversation, not a file: images arrive as paths under the input root and
+# are read here, so the body is text only.
+MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 class Busy(RuntimeError):
@@ -38,9 +39,8 @@ class Busy(RuntimeError):
 class ArmState:
     """Owns the child process and serialises access to the GPU."""
 
-    def __init__(self, config: LoadConfig, out_dir: Path, in_dir: Path) -> None:
+    def __init__(self, config: LoadConfig, in_dir: Path) -> None:
         self.config = config
-        self.out_dir = out_dir
         self.in_dir = in_dir
         # One timeline per arm, reset per job: the log reader writes to it from
         # its own thread for as long as the child lives.
@@ -48,20 +48,10 @@ class ArmState:
         # Decided once, when there is a child to ask about. Until then there is
         # nothing to measure and no way to know what kind of answer exists.
         self.vram_scope: vram.Scope | None = None
-        self.server = ComfyServer(config, self.progress)
-        self.models = Models(
-            unet=config.diffusion_model.name,
-            clip=config.text_encoder.name,
-            video_vae=config.video_vae.name,
-            audio_vae=config.audio_vae.name,
-            lora=config.turbo_lora.name,
-            ref_unet=config.ref2va_model.name if config.ref2va_model is not None else "",
-            weight_dtype=config.weight_dtype,
-            clip_device=config.text_encoder_device,
-            lora_mode=config.lora_mode,
-        )
-        # One generation at a time. ComfyUI would queue a second prompt itself,
-        # but then two jobs would share one timeline and neither would read right.
+        self.server = LlamaServer(config, self.progress)
+        # One completion at a time. The child has one slot and would queue a
+        # second job itself, but then two jobs would share one timeline and
+        # neither would read right.
         self._gpu = threading.Lock()
 
     def vram_gib(self) -> float | None:
@@ -90,38 +80,39 @@ class ArmState:
         return self.server.running
 
     def run(self, body: dict[str, Any]) -> dict[str, Any]:
-        job = parse_job(body, self.out_dir, self.in_dir)
-        if job.mode == "ref2v":
-            # Checked before the card is taken: a missing checkpoint is a fact
-            # about this machine, and ComfyUI would only say "value not in
-            # list" about it after the transformer had been read.
-            ref = self.config.ref2va_model
-            if ref is None or not ref.is_file():
-                raise ChildFailed(
-                    f"{ref or 'the ref2va checkpoint'} is not there -- ref2v runs on the ref2va "
-                    "weights, not fl2va (see the arm README for the download)"
-                )
+        job = parse_job(body, self.config.context_size, self.in_dir)
         raw_id = body.get("jobId")
         job_id = raw_id if isinstance(raw_id, str) and raw_id else None
 
         if not self._gpu.acquire(blocking=False):
             # Before `begin`, so a rejected job cannot wipe the timeline of the
             # one that is actually running.
-            raise Busy("a generation is already running")
+            raise Busy("a completion is already running")
 
         try:
             self.progress.begin(job_id)
             if not self.server.running:
-                with self.progress.step(
-                    "start", "Start ComfyUI", self.config.diffusion_model.name
-                ):
+                with self.progress.step("start", "Start llama-server", self.config.model.name):
+                    # Where the weights land is written into this step by the
+                    # log reader, as the child reports it.
+                    self.progress.start(
+                        "load",
+                        "Load model",
+                        f"with {self.config.mmproj.name}",
+                        parent="start",
+                    )
                     self.server.start()
-                print(f"[{ARM_ID}] ComfyUI up on port {self.server.port}", flush=True)
+                    self.progress.finish_step("load")
+                print(
+                    f"[{ARM_ID}] llama-server up on port {self.server.port}: "
+                    f"{self.server.placement.summary() or 'placement not reported'}",
+                    flush=True,
+                )
                 # One reading straight away, so the first job's chart starts at
                 # the load rather than at the sampler thread's next tick.
                 self.progress.sample_vram()
 
-            report = generate(self.server, self.models, job, self.progress)
+            report = generate(self.server, job, self.progress)
             # After the job, not before: the scope is discovered by taking a
             # reading, and the first reading happens once the child is up.
             report.vram_scope = self.vram_scope or "unavailable"
@@ -133,7 +124,7 @@ class ArmState:
             self._gpu.release()
 
         print(
-            f"[{ARM_ID}] wrote {len(report.videos)} clip(s) in {report.seconds_total:.1f}s "
+            f"[{ARM_ID}] {report.tokens_generated} tokens in {report.seconds_total:.1f}s "
             f"(peak vram {report.peak_vram_gib:.2f} GiB, scope {report.vram_scope})",
             flush=True,
         )
@@ -158,7 +149,7 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                         "arm": ARM_ID,
                         "version": __version__,
                         "loaded": state.loaded,
-                        "model": state.config.diffusion_model.name,
+                        "model": state.config.model.name,
                     },
                 )
                 return
@@ -177,6 +168,8 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                         "port": state.server.port,
                         "vramGib": state.vram_gib(),
                         "vramScope": state.vram_scope,
+                        "placement": state.server.placement.summary(),
+                        "kvMib": state.server.placement.kv_mib,
                         "tail": state.server.tail().splitlines()[-10:],
                     },
                 )
@@ -235,7 +228,8 @@ def serve(host: str, port: int, state: ArmState) -> None:
     server = ThreadingHTTPServer((host, port), build_handler(state))
     print(f"[{ARM_ID}] listening on http://{host}:{port}", flush=True)
     print(
-        f"[{ARM_ID}] model={state.config.diffusion_model} out={state.out_dir} in={state.in_dir}",
+        f"[{ARM_ID}] model={state.config.model} mmproj={state.config.mmproj} "
+        f"ctx={state.config.context_size} in={state.in_dir}",
         flush=True,
     )
     try:

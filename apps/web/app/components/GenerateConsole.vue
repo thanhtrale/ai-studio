@@ -28,6 +28,8 @@ import type {
   ArmVideoReport,
   GenerateRequest,
   GenerateResponse,
+  VideoEnhanceRequest,
+  VideoEnhanceResponse,
   VideoGenerateRequest,
   VideoGenerateResponse,
 } from '#shared/generate';
@@ -39,6 +41,7 @@ import {
   type MediaItem,
   type MediaMeta,
   type VideoJobSettings,
+  type VideoMode,
 } from '#shared/library';
 
 import {
@@ -61,6 +64,7 @@ import { restoreKey } from '../utils/restore';
 import JobTimeline from './JobTimeline.vue';
 import MediaPicker from './MediaPicker.vue';
 import MediaThumb from './MediaThumb.vue';
+import PromptDiff from './PromptDiff.vue';
 import VramChart from './VramChart.vue';
 import UiAlert from './ui/Alert.vue';
 import UiBadge from './ui/Badge.vue';
@@ -140,34 +144,22 @@ const VRAM_SCOPE: Record<string, string> = {
 };
 
 /**
- * Styles worth keeping, as the pair of prompts that produce them.
+ * MiniMax-H3's two tasks, each its own checkpoint.
  *
- * Only the look: no subject, no motion, no framing. A preset that described a
- * shot would fight whatever is typed in the box below it, and the whole point
- * of the split is that the style survives a change of subject.
+ * fl2v reads the stills as the clip's first and last frame; ref2v reads them as
+ * `<Picture 1>` ... references the prompt cites, and designs a new shot around
+ * them. Same sampler, same panel -- what changes is what an image *means*,
+ * which is why the reference slots, their captions and the enhancer's
+ * instructions all follow this switch.
  */
-const STYLE_PRESETS: { name: string; style: string; negative: string }[] = [
-  {
-    name: '3D xianxia',
-    style: [
-      'semi-realistic 3D rendered xianxia film look, Chinese fantasy wuxia aesthetic',
-      'cinematic anamorphic photography, one slow deliberate camera move',
-      'desaturated palette of ash grey and charcoal with deep crimson accents',
-      'low-key volumetric lighting, cool overcast key light, warm rim light',
-      'shallow depth of field, creamy bokeh, drifting snow and dust motes',
-      'fine film grain, subtle chromatic aberration',
-      'detailed silk, embroidery and blackened metal materials',
-      'Audio: sparse guzheng and low strings, wind over stone, cloth movement, no dialogue',
-    ].join(', '),
-    negative: [
-      'flat 2D cel shading, lineart, western cartoon, chibi',
-      'blurry, out of focus, jpeg artifacts, lowres, motion smear, ghosting',
-      'oversaturated, neon colours, flat frontal lighting, blown highlights',
-      'bad anatomy, deformed hands, extra fingers, extra limbs',
-      'watermark, signature, text, logo, subtitle bars, cropped',
-      'modern clothing',
-    ].join(', '),
-  },
+const MODES: { value: VideoMode; label: string }[] = [
+  { value: 'fl2v', label: 'fl2v — first/last frame' },
+  { value: 'ref2v', label: 'ref2v — references' },
+];
+
+const REF_IMAGE_SIZES = [
+  { value: 'match', label: 'match — scaled to the clip’s own area' },
+  { value: 'max', label: 'max — 2048 short edge, best identity, several times slower' },
 ];
 
 /** By declared capability: an arm that cannot take one of these jobs is not offered. */
@@ -207,8 +199,18 @@ function schemaProperty(key: string): SchemaProperty | null {
  */
 const isTurbo = computed(() => schemaProperty('turboLora') !== null);
 
-/** First frame and last frame, against the diffusers arm's single still. */
-const maxReferences = computed(() => (isTurbo.value ? 2 : 1));
+const mode = ref<VideoMode>('fl2v');
+// A plain string for the shared Select; narrowed where it is sent.
+const refImageSize = ref<string>('match');
+/** ref2v is only offered to an arm that declares the checkpoint it runs on. */
+const hasRef2v = computed(() => schemaProperty('ref2vaModel') !== null);
+const isRef2v = computed(() => isTurbo.value && hasRef2v.value && mode.value === 'ref2v');
+
+/**
+ * First frame and last frame, nine references, or the diffusers arm's single
+ * still -- the three things an image slot can mean on this page.
+ */
+const maxReferences = computed(() => (isRef2v.value ? 9 : isTurbo.value ? 2 : 1));
 
 /**
  * What each offload setting actually does, in the words of the measurements.
@@ -247,6 +249,15 @@ const prompt = ref('');
 // and leaving this empty is how you write the whole prompt in one box.
 const stylePrompt = ref('');
 const negativePrompt = ref('');
+// The enhancer's brief: what to change, in the user's own words. Not part of
+// the prompt and never sent to H3 -- only the rewrite it produces is.
+const enhanceNote = ref('');
+/** The prompt as it was before the last rewrite, so one click puts it back. */
+const promptBeforeEnhance = ref<string | null>(null);
+/** Open after every rewrite: what changed is the first thing worth reading. */
+const showEnhanceDiff = ref(true);
+/** Said after a rewrite that cites a `<Picture N>` with no image behind it. */
+const enhanceWarning = ref<string | null>(null);
 // Held as a plain string because the shared Select speaks strings; the narrow
 // union is applied where the arithmetic needs it.
 const aspect = ref<string>('16:9');
@@ -384,14 +395,39 @@ watch(
       enhancePrompt.value = false;
       spatialUpsample.value = false;
       temporalUpsample.value = false;
+      foldStyleIntoPrompt();
     } else {
       batch.value = 1;
     }
-    const kept = referenceIds.value.slice(0, maxReferences.value);
-    referenceIds.value = kept.length > 0 ? kept : [null];
+    fitReferenceSlots();
   },
   { flush: 'sync' },
 );
+
+watch(isRef2v, fitReferenceSlots, { flush: 'sync' });
+
+/**
+ * Keep as many chosen stills as the current meaning of a slot allows, plus one
+ * empty slot to add another. Leaving ref2v keeps the first two references,
+ * which then become a first and a last frame -- visible in the slot captions,
+ * so the change of meaning is not silent.
+ */
+function fitReferenceSlots(): void {
+  const chosen = referenceIds.value.filter((id): id is string => id !== null).slice(0, maxReferences.value);
+  referenceIds.value = chosen.length < maxReferences.value ? [...chosen, null] : chosen;
+}
+
+/**
+ * H3 has one prompt box, because the enhancer rewrites the whole prompt and a
+ * second box would be a half it never sees. Anything in the style box --
+ * typed for the other arm, or restored from an older record -- joins the
+ * prompt rather than being dropped.
+ */
+function foldStyleIntoPrompt(): void {
+  if (!stylePrompt.value.trim()) return;
+  prompt.value = mergePrompt(prompt.value, stylePrompt.value);
+  stylePrompt.value = '';
+}
 
 /**
  * A reference arriving in the URL adopts its shape too, once its size is known.
@@ -418,11 +454,13 @@ function adoptReference(id: string | null): void {
   next[slot] = id;
   // Keep the slots dense: a hole in the middle would send a list the arm reads
   // positionally, with the last frame in the first frame's place.
-  const dense = next.filter((entry) => entry !== null);
+  const dense: (string | null)[] = next.filter((entry) => entry !== null);
   if (dense.length < maxReferences.value) dense.push(null);
   referenceIds.value = dense.length > 0 ? dense : [null];
 
-  if (slot !== 0 || !id) return;
+  // A ref2v reference is cited, not started on, so its shape is no reason to
+  // change the clip's.
+  if (slot !== 0 || !id || isRef2v.value) return;
   if (byId.value.get(id)?.width) aspect.value = REFERENCE_ASPECT;
   else adoptShapeFor.value = id;
 }
@@ -440,7 +478,7 @@ watch(referenceRatio, (current) => {
   // go on claiming a ratio it no longer has.
   if (!current && aspect.value === REFERENCE_ASPECT) aspect.value = '16:9';
 
-  if (current && adoptShapeFor.value === chosenIds.value[0]) {
+  if (current && !isRef2v.value && adoptShapeFor.value === chosenIds.value[0]) {
     aspect.value = REFERENCE_ASPECT;
     adoptShapeFor.value = null;
   }
@@ -467,6 +505,13 @@ function applyRestore(meta: MediaMeta): void {
   prompt.value = meta.prompt ?? '';
   stylePrompt.value = meta.stylePrompt ?? '';
   negativePrompt.value = meta.negativePrompt ?? '';
+  // Before the references: the mode decides how many slots there are and what
+  // each one means. A record from before the choice was fl2v.
+  mode.value = isVideoSettings(settings) && settings.mode === 'ref2v' ? 'ref2v' : 'fl2v';
+  refImageSize.value = isVideoSettings(settings) && settings.refImageSize === 'max' ? 'max' : 'match';
+  if (isTurbo.value) foldStyleIntoPrompt();
+  enhanceNote.value = '';
+  promptBeforeEnhance.value = null;
 
   const ids = meta.referenceIds ?? (meta.referenceId ? [meta.referenceId] : []);
   const kept: (string | null)[] = ids.slice(0, maxReferences.value);
@@ -479,8 +524,8 @@ function applyRestore(meta: MediaMeta): void {
   if (typeof dtype === 'string') weightDtype.value = dtype;
   const encoderDevice = meta.armParams?.['textEncoderDevice'];
   if (typeof encoderDevice === 'string') textEncoderOnCpu.value = encoderDevice === 'cpu';
-  const mode = meta.armParams?.['vramMode'];
-  if (typeof mode === 'string') vramMode.value = mode;
+  const placement = meta.armParams?.['vramMode'];
+  if (typeof placement === 'string') vramMode.value = placement;
   const lora = meta.armParams?.['loraMode'];
   if (typeof lora === 'string') loraMode.value = lora;
 
@@ -540,7 +585,7 @@ watch(
   { immediate: true },
 );
 
-const status = ref<'idle' | 'generating'>('idle');
+const status = ref<'idle' | 'generating' | 'enhancing'>('idle');
 const failure = ref<string | null>(null);
 /** The diffusers arm's single clip, with the report that came with it. */
 const result = ref<{ media: MediaItem; report: ArmGenerationReport } | null>(null);
@@ -556,12 +601,86 @@ const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: fo
 const mergedPrompt = computed(() => mergePrompt(prompt.value, stylePrompt.value));
 
 const canGenerate = computed(
-  () => mergedPrompt.value.length > 0 && status.value === 'idle' && arm.value !== null,
+  () =>
+    mergedPrompt.value.length > 0 &&
+    status.value === 'idle' &&
+    arm.value !== null &&
+    // ref2v with nothing to cite is fl2v on the wrong checkpoint.
+    (!isRef2v.value || chosenIds.value.length > 0),
 );
 
-function applyPreset(preset: (typeof STYLE_PRESETS)[number]): void {
-  stylePrompt.value = preset.style;
-  negativePrompt.value = preset.negative;
+/** Something to rewrite from: a draft, a note, or an image to describe. */
+const canEnhance = computed(
+  () =>
+    isTurbo.value &&
+    status.value === 'idle' &&
+    (prompt.value.trim().length > 0 || enhanceNote.value.trim().length > 0 || chosenIds.value.length > 0),
+);
+
+/**
+ * Rewrite the prompt on the vision-language arm, from the note and the stills.
+ *
+ * The answer replaces the prompt box rather than going straight to H3: a clip
+ * is minutes, and the rewrite is worth reading first. The note stays, so a
+ * second attempt is one click, and the old prompt is kept for one undo.
+ */
+async function enhance(): Promise<void> {
+  if (!canEnhance.value) return;
+
+  status.value = 'enhancing';
+  failure.value = null;
+  enhanceWarning.value = null;
+  const jobId = crypto.randomUUID();
+  follow(jobId);
+
+  try {
+    const body: VideoEnhanceRequest = {
+      jobId,
+      mode: isRef2v.value ? 'ref2v' : 'fl2v',
+      prompt: prompt.value,
+      comment: enhanceNote.value,
+      ...(chosenIds.value.length > 0 ? { referenceIds: chosenIds.value } : {}),
+      seconds: duration.value.seconds,
+      width: frame.value.width,
+      height: frame.value.height,
+    };
+    const answer = await $fetch<VideoEnhanceResponse>('/api/enhance/video', { method: 'POST', body });
+    promptBeforeEnhance.value = prompt.value;
+    prompt.value = answer.prompt;
+    showEnhanceDiff.value = true;
+    const warnings: string[] = [];
+    if (answer.danglingTags.length > 0) {
+      warnings.push(
+        `The rewrite cites ${answer.danglingTags.map((index) => `<Picture ${index}>`).join(', ')}, ` +
+          `but only ${chosenIds.value.length} reference${chosenIds.value.length === 1 ? ' is' : 's are'} chosen. ` +
+          'Fix the tag or add the image before generating.',
+      );
+    }
+    if (answer.missingQuotes.length > 0) {
+      warnings.push(
+        `Dialogue not kept word for word: ${answer.missingQuotes.map((line) => `"${line}"`).join(', ')}. ` +
+          'Put it back in the Audio line exactly as written, or enhance again.',
+      );
+    }
+    if (answer.missingSections.length > 0) {
+      warnings.push(
+        `The rewrite is missing ${answer.missingSections.join(', ')} -- H3's prompt format needs ` +
+          'every section. Enhance again, or add it by hand.',
+      );
+    }
+    enhanceWarning.value = warnings.length > 0 ? warnings.join(' ') : null;
+  } catch (error) {
+    failure.value = describeFetchError(error);
+  } finally {
+    status.value = 'idle';
+  }
+}
+
+function undoEnhance(): void {
+  if (promptBeforeEnhance.value === null) return;
+  prompt.value = promptBeforeEnhance.value;
+  promptBeforeEnhance.value = null;
+  enhanceWarning.value = null;
 }
 
 function settingsNow(): VideoJobSettings {
@@ -589,6 +708,8 @@ function settingsNow(): VideoJobSettings {
           batch: batch.value,
           // Overwritten per file by the server, which knows which one each is.
           batchIndex: 0,
+          mode: isRef2v.value ? 'ref2v' : 'fl2v',
+          ...(isRef2v.value ? { refImageSize: refImageSize.value === 'max' ? ('max' as const) : ('match' as const) } : {}),
         }
       : {}),
   };
@@ -599,6 +720,7 @@ async function generate(): Promise<void> {
 
   status.value = 'generating';
   failure.value = null;
+  enhanceWarning.value = null;
   result.value = null;
   clips.value = [];
   clipReport.value = null;
@@ -616,10 +738,11 @@ async function generate(): Promise<void> {
     if (isTurbo.value) {
       const body: VideoGenerateRequest = {
         jobId,
+        // One box on this arm: the style half is folded in when the arm is
+        // chosen, so there is nothing to send beside it.
         prompt: prompt.value.trim(),
         settings,
         output: output.value,
-        ...(stylePrompt.value.trim() ? { stylePrompt: stylePrompt.value.trim() } : {}),
         ...(negativePrompt.value.trim() ? { negativePrompt: negativePrompt.value.trim() } : {}),
         ...(chosenIds.value.length > 0 ? { referenceIds: chosenIds.value } : {}),
         armParams: {
@@ -666,11 +789,36 @@ const number = (value: number): string => value.toLocaleString('en-US');
         for="arm"
         :hint="
           isTurbo
-            ? 'text-to-video, first/last-frame video, a few distilled steps, picture and stereo audio denoised together'
+            ? 'text-to-video, first/last-frame or reference video, a few distilled steps, picture and stereo audio denoised together'
             : 'text-to-video, image-to-video, eight distilled steps, video and audio together'
         "
       >
         <UiSelect id="arm" v-model="armId" :options="armOptions" />
+      </UiField>
+
+      <UiField v-if="isTurbo && hasRef2v" label="Mode">
+        <div class="flex flex-wrap gap-2">
+          <UiButton
+            v-for="option in MODES"
+            :key="option.value"
+            size="sm"
+            :active="mode === option.value"
+            :data-testid="`mode-${option.value}`"
+            @click="mode = option.value"
+          >
+            {{ option.label }}
+          </UiButton>
+        </div>
+        <template #hint>
+          <span v-if="isRef2v">
+            Up to nine stills the prompt cites as &lt;Picture 1&gt;&hellip;&lt;Picture 9&gt; — people, objects,
+            places. The clip starts on none of them. Runs on the ref2va checkpoint; switching modes swaps the
+            transformer.
+          </span>
+          <span v-else>
+            Text alone, or a first and a last frame the clip opens and closes on. Runs on the fl2va checkpoint.
+          </span>
+        </template>
       </UiField>
 
       <UiCheckbox
@@ -833,10 +981,16 @@ const number = (value: number): string => value.toLocaleString('en-US');
             placeholder="Describe the scene, the motion, the light"
           />
           <template #hint>
-            <span v-if="isTurbo">
-              State the whole scene first, then break it into timed shots, and describe the audio —
-              dialogue, effects, music — in the same block. The audio is generated with the picture rather
-              than added to it.
+            <span v-if="isRef2v">
+              H3 reads six sections: subject_definitions (&lt;Subject 1&gt; is the knight in &lt;Picture 1&gt;
+              …), summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music —
+              and calls each reference by its &lt;Subject N&gt; after defining it. Write freely here and let
+              the enhancer put it in that shape.
+            </span>
+            <span v-else-if="isTurbo">
+              H3 reads integrated_multimodal_description ([Shot 1] …), overall_soundscape and
+              non_diegetic_music, with dialogue as &lt;d&gt;[Language] …&lt;/d&gt;. Write freely here and let
+              the enhancer put it in that shape; the audio is generated with the picture.
             </span>
             <span v-else>
               The model was trained on long single-paragraph audio-visual captions and degrades on short
@@ -845,38 +999,71 @@ const number = (value: number): string => value.toLocaleString('en-US');
           </template>
         </UiField>
 
-        <UiField label="Style" for="style">
+        <UiField v-if="isTurbo" label="Note for the enhancer" for="enhance-note">
+          <UiTextarea
+            id="enhance-note"
+            v-model="enhanceNote"
+            :rows="3"
+            placeholder="What to change or add — e.g. make it dusk, she says “we’re late”, slower camera, end on a close-up"
+          />
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <UiButton :disabled="!canEnhance" data-testid="enhance" @click="enhance">
+              {{ status === 'enhancing' ? 'Enhancing…' : 'Enhance prompt' }}
+            </UiButton>
+            <UiButton v-if="promptBeforeEnhance !== null && status === 'idle'" size="sm" @click="undoEnhance">
+              Undo enhance
+            </UiButton>
+            <UiButton
+              v-if="promptBeforeEnhance !== null"
+              size="sm"
+              :active="showEnhanceDiff"
+              data-testid="toggle-diff"
+              @click="showEnhanceDiff = !showEnhanceDiff"
+            >
+              {{ showEnhanceDiff ? 'Hide changes' : 'Show changes' }}
+            </UiButton>
+          </div>
+          <!-- Against the box as it is now, not the rewrite as it arrived: an
+               edit made after the enhance is part of what will be sent. -->
+          <PromptDiff
+            v-if="promptBeforeEnhance !== null && showEnhanceDiff"
+            class="mt-3"
+            :before="promptBeforeEnhance"
+            :after="prompt"
+          />
+          <template #hint>
+            Qwen3-VL reads the {{ isRef2v ? 'references' : 'keyframes' }}, this note and the prompt above, and
+            rewrites the prompt in the format H3's own rewriter (H3-Context-IR) produces —
+            <template v-if="isRef2v">subject definitions, summary, retention analysis, a shot-by-shot
+            description citing each &lt;Subject N&gt;, sound and music</template>
+            <template v-else>an alignment line for the keyframes, a shot-by-shot description, sound and
+            music</template>. Text in double quotes is spoken dialogue and is kept word for word. The result
+            replaces the prompt for you to read before generating. It runs on its own arm, so the card is
+            swapped twice: the first clip after an enhance reloads H3.
+          </template>
+        </UiField>
+
+        <UiAlert v-if="enhanceWarning" tone="warn">{{ enhanceWarning }}</UiAlert>
+
+        <UiField v-if="!isTurbo" label="Style" for="style">
           <UiTextarea
             id="style"
             v-model="stylePrompt"
             :rows="3"
             placeholder="How it should look — medium, lighting, palette, camera, score"
           />
-          <div v-if="STYLE_PRESETS.length" class="mt-2 flex flex-wrap items-center gap-2">
-            <span class="text-xs text-slate-500">Presets:</span>
-            <UiButton
-              v-for="preset in STYLE_PRESETS"
-              :key="preset.name"
-              size="sm"
-              :data-testid="`style-preset-${preset.name}`"
-              @click="applyPreset(preset)"
-            >
-              {{ preset.name }}
-            </UiButton>
-          </div>
           <template #hint>
             Split from the prompt for editing only — the two are joined with a comma and sent as one, so
-            writing everything above and leaving this empty gives exactly the same result. A preset also
-            fills the negative prompt.
+            writing everything above and leaving this empty gives exactly the same result.
           </template>
         </UiField>
 
-        <details v-if="stylePrompt.trim() && prompt.trim()" class="text-xs text-slate-500">
+        <details v-if="!isTurbo && stylePrompt.trim() && prompt.trim()" class="text-xs text-slate-500">
           <summary class="cursor-pointer hover:text-slate-300">What the model will be given</summary>
           <p class="mt-2 rounded-lg bg-black/30 p-3 font-mono leading-relaxed">{{ mergedPrompt }}</p>
         </details>
 
-        <UiField :label="isTurbo ? 'Keyframes' : 'Reference image'">
+        <UiField :label="isRef2v ? 'References' : isTurbo ? 'Keyframes' : 'Reference image'" :required="isRef2v">
           <div class="flex flex-wrap items-start gap-3">
             <div v-for="(id, index) in referenceIds" :key="`${index}-${id ?? 'empty'}`" class="space-y-1">
               <button
@@ -886,9 +1073,13 @@ const number = (value: number): string => value.toLocaleString('en-US');
                 @click="picking = index"
               >
                 <MediaThumb v-if="id && byId.get(id)" :item="byId.get(id) as MediaItem" fit="contain" />
-                <span v-else>{{ index === 0 ? 'Choose or upload' : '+ Last frame' }}</span>
+                <span v-else-if="index === 0">Choose or upload</span>
+                <span v-else>{{ isRef2v ? '+ Reference' : '+ Last frame' }}</span>
               </button>
-              <p v-if="isTurbo" class="w-32 text-center text-[10px] text-slate-500">
+              <p v-if="isRef2v" class="w-32 text-center font-mono text-[10px] text-slate-400">
+                &lt;Picture {{ index + 1 }}&gt;
+              </p>
+              <p v-else-if="isTurbo" class="w-32 text-center text-[10px] text-slate-500">
                 {{ index === 0 ? 'first frame' : 'last frame' }}
               </p>
               <button
@@ -900,10 +1091,14 @@ const number = (value: number): string => value.toLocaleString('en-US');
                 remove
               </button>
             </div>
-            <UiBadge v-if="reference" tone="accent">image-to-video</UiBadge>
+            <UiBadge v-if="reference" tone="accent">{{ isRef2v ? 'reference-to-video' : 'image-to-video' }}</UiBadge>
           </div>
           <template #hint>
-            <span v-if="isTurbo">
+            <span v-if="isRef2v">
+              In order, up to {{ maxReferences }}: the first is &lt;Picture 1&gt;, the second &lt;Picture 2&gt;, and
+              the prompt refers to them by those tags. At least one is needed — with none, this is fl2v.
+            </span>
+            <span v-else-if="isTurbo">
               Positional, up to {{ maxReferences }}: the first still opens the clip and the second closes
               it, and the model generates the motion between them. With neither, this is plain
               text-to-video.
@@ -912,6 +1107,14 @@ const number = (value: number): string => value.toLocaleString('en-US');
               A reference switches the run to image-to-video: the still becomes the first frame and the
               clip moves on from it.
             </span>
+          </template>
+        </UiField>
+
+        <UiField v-if="isRef2v" label="Reference size" for="ref-size">
+          <UiSelect id="ref-size" v-model="refImageSize" :options="REF_IMAGE_SIZES" />
+          <template #hint>
+            Reference tokens ride through every sampling step, so a larger reference costs time on every one
+            of them. match is usually enough; max is for when a face has to hold.
           </template>
         </UiField>
 

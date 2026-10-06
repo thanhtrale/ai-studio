@@ -14,6 +14,14 @@ export interface LaunchSpec {
 export interface ExitInfo {
   code: number | null;
   signal: NodeJS.Signals | null;
+  /**
+   * Set when the process never started or could not be managed -- a command
+   * that is not there (ENOENT), one that may not be executed. Carried here
+   * rather than as a rejection: `exited` is watched from several places with
+   * a bare `.then`, and a rejection none of them caught took the whole
+   * supervisor down the first time an arm's interpreter was missing.
+   */
+  error?: Error;
 }
 
 export interface LaunchedProcess {
@@ -68,8 +76,10 @@ export function launch(spec: LaunchSpec): LaunchedProcess {
   child.stdout.on('data', (chunk: string) => output.push(chunk));
   child.stderr.on('data', (chunk: string) => output.push(chunk));
 
-  const exited = new Promise<ExitInfo>((resolve, reject) => {
-    child.once('error', reject);
+  // Never rejects. Whichever of `error` and `exit` comes first settles it; a
+  // spawn that fails emits `error` and no `exit` at all.
+  const exited = new Promise<ExitInfo>((resolve) => {
+    child.once('error', (error) => resolve({ code: null, signal: null, error }));
     child.once('exit', (code, signal) => resolve({ code, signal }));
   });
 

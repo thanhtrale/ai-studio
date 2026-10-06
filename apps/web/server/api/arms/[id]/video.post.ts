@@ -1,6 +1,6 @@
 import type { VideoGenerateRequest, VideoGenerateResponse } from '#shared/generate';
 import { mergePrompt } from '#shared/generate';
-import { generatedMediaId, sanitiseCollection } from '#shared/library';
+import { generatedMediaId, sanitiseCollection, type VideoMode } from '#shared/library';
 
 import { armImagePath, mediaIdFromPath } from '../../../utils/jobs';
 import { describeMedia, writeMeta } from '../../../utils/library';
@@ -20,8 +20,11 @@ import { RelayError } from '../../../utils/supervisor';
  * rather than the image route's hundred: a clip is minutes, not seconds.
  */
 const MAX_BATCH = 16;
-/** First frame, last frame. The fl2va checkpoint has nowhere to put a third. */
-const MAX_REFERENCES = 2;
+/**
+ * fl2v: first frame, last frame -- the fl2va checkpoint has nowhere to put a
+ * third. ref2v: the reference node grows to nine image inputs.
+ */
+const MAX_REFERENCES: Record<VideoMode, number> = { fl2v: 2, ref2v: 9 };
 
 export default defineEventHandler(async (event): Promise<VideoGenerateResponse> => {
   const armId = getRouterParam(event, 'id');
@@ -62,12 +65,33 @@ export default defineEventHandler(async (event): Promise<VideoGenerateResponse> 
     });
   }
 
-  const referenceIds = body.referenceIds ?? [];
-  if (referenceIds.length > MAX_REFERENCES) {
+  const mode: VideoMode = settings?.mode ?? 'fl2v';
+  if (mode !== 'fl2v' && mode !== 'ref2v') {
     throw createError({
       statusCode: 400,
       statusMessage: 'invalid_request',
-      data: { message: `at most ${MAX_REFERENCES} keyframes (first frame, last frame)` },
+      data: { message: 'mode must be fl2v or ref2v' },
+    });
+  }
+
+  const referenceIds = body.referenceIds ?? [];
+  if (referenceIds.length > MAX_REFERENCES[mode]) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'invalid_request',
+      data: {
+        message:
+          mode === 'fl2v'
+            ? `at most ${MAX_REFERENCES.fl2v} keyframes (first frame, last frame)`
+            : `at most ${MAX_REFERENCES.ref2v} reference images`,
+      },
+    });
+  }
+  if (mode === 'ref2v' && referenceIds.length === 0) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'invalid_request',
+      data: { message: 'ref2v needs at least one reference image' },
     });
   }
 
@@ -107,6 +131,11 @@ export default defineEventHandler(async (event): Promise<VideoGenerateResponse> 
         ...(settings.flowShift !== undefined ? { flowShift: settings.flowShift } : {}),
         ...(body.negativePrompt ? { negativePrompt: body.negativePrompt } : {}),
         ...(refImages.length > 0 ? { refImages } : {}),
+        // Only said when it is not the default, so an arm that predates the
+        // choice still takes an fl2v job unchanged.
+        ...(mode === 'ref2v'
+          ? { mode, ...(settings.refImageSize ? { refImageSize: settings.refImageSize } : {}) }
+          : {}),
       },
     });
 

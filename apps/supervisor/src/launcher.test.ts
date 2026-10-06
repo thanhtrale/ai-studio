@@ -46,6 +46,22 @@ describe('launch', () => {
     expect(argv[0]).toBe(hostile);
   });
 
+  it('resolves rather than rejects when the command is not there', async () => {
+    // An arm discovered before its interpreter is installed. A rejection here
+    // went unhandled and took the whole supervisor down with it.
+    const process_ = launch({
+      command: './.venv/Scripts/definitely-not-installed.exe',
+      args: [],
+      cwd: process.cwd(),
+    });
+
+    const exit = await process_.exited;
+
+    expect(process_.pid).toBe(-1);
+    expect(exit.code).toBeNull();
+    expect((exit.error as NodeJS.ErrnoException | undefined)?.code).toBe('ENOENT');
+  });
+
   it('captures output and reports the exit code', async () => {
     const process_ = launch({
       command: process.execPath,

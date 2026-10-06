@@ -1,23 +1,20 @@
 """What the current job is doing, readable while it is doing it.
 
-A generation here is minutes long and almost all of that is one of three things:
-weights crossing PCIe, the enhancer writing, or the denoising loop. A caller that
-only gets a report at the end cannot tell those apart -- and cannot tell any of
-them from a hang. So the arm keeps a running record and serves it.
-
-The shape is the studio's `JobProgress`, so the supervisor can hand it to the
-browser without knowing what a sigma is.
+The same shape the video and image arms report, for the same reason: a job
+crosses three processes and none of them sees the whole of it. Taken from the
+image arm unchanged: there is no torch here either -- the model lives in a
+child process written in C++ -- so the VRAM figure comes from nvidia-smi rather
+than `torch.memory_reserved`, with the scope of that reading measured rather
+than assumed (see `vram.py`).
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
-import torch
-
-GIB = 1024**3
 # One reading a second, matching the machine-wide meter the supervisor samples.
 VRAM_INTERVAL_SECONDS = 1.0
 # Twenty minutes. A job longer than that has other problems.
@@ -29,7 +26,7 @@ def _now_ms() -> float:
 
 
 class _Step:
-    __slots__ = ("key", "label", "detail", "parent", "state", "started", "seconds", "note", "replaces")
+    __slots__ = ("detail", "key", "label", "note", "parent", "replaces", "seconds", "started", "state")
 
     def __init__(self, key: str, label: str, detail: str | None, parent: str | None) -> None:
         self.key = key
@@ -47,7 +44,7 @@ class _Step:
 
 
 class _Meter:
-    __slots__ = ("key", "label", "detail", "done", "total")
+    __slots__ = ("detail", "done", "key", "label", "total")
 
     def __init__(self, key: str, label: str, total: int, detail: str | None) -> None:
         self.key = key
@@ -60,17 +57,19 @@ class _Meter:
 class JobProgress:
     """The current job's timeline. One per arm process, reset per job.
 
-    Every method is safe to call from the generation thread while the HTTP
-    thread is reading, which is the whole point: the reader is a different
-    request than the one doing the work.
+    Every method is safe to call from the generation thread, from the thread
+    reading the child's log, and from the HTTP thread at the same time -- which
+    is the whole point, since all three write to it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, vram_gib: Callable[[], float | None] | None = None) -> None:
         self._lock = threading.RLock()
         self._job_id: str | None = None
         self._steps: list[_Step] = []
         self._meters: list[_Meter] = []
         self._vram: list[dict[str, float]] = []
+        self._vram_gib = vram_gib
+        self._peak_gib = 0.0
         self._sampling: threading.Event | None = None
         self._sampler: threading.Thread | None = None
 
@@ -79,7 +78,7 @@ class JobProgress:
     def begin(self, job_id: str | None) -> None:
         """Start a new job, discarding the previous one.
 
-        The previous job's timeline is dropped rather than kept: the supervisor
+        The previous timeline is dropped rather than kept: the supervisor
         already took a final snapshot when that job returned, and keeping two
         would only invite showing the wrong one.
         """
@@ -88,6 +87,7 @@ class JobProgress:
             self._steps = []
             self._meters = []
             self._vram = []
+            self._peak_gib = 0.0
         self._start_sampling()
 
     def finish(self) -> None:
@@ -111,6 +111,8 @@ class JobProgress:
 
     def start(self, key: str, label: str, detail: str | None = None, parent: str | None = None) -> None:
         with self._lock:
+            if self._find(key) is not None:
+                return
             self._steps.append(_Step(key, label, detail, parent))
 
     def finish_step(self, key: str, detail: str | None = None, seconds: float | None = None) -> None:
@@ -130,12 +132,16 @@ class JobProgress:
                 step.detail = detail
 
     def annotate(self, key: str, note: str, replaces: str | None = None) -> None:
-        """Attach text worth reading in full, such as what the enhancer wrote."""
         with self._lock:
             step = self._find(key)
             if step is not None:
                 step.note = note
                 step.replaces = replaces
+
+    def running(self, key: str) -> bool:
+        with self._lock:
+            step = self._find(key)
+            return step is not None and step.state == "running"
 
     def _find(self, key: str) -> _Step | None:
         for step in self._steps:
@@ -175,31 +181,48 @@ class JobProgress:
     # --- counted work --------------------------------------------------------
 
     def meter(self, key: str, label: str, total: int, detail: str | None = None) -> None:
+        """Declare a counted step, or update the one already declared.
+
+        Updating in place rather than replacing, because the detail is the
+        child's own rate and arrives with every token -- replacing would reset
+        the count to zero between each reading of it.
+        """
         with self._lock:
-            self._meters = [entry for entry in self._meters if entry.key != key]
+            for entry in self._meters:
+                if entry.key == key:
+                    entry.label = label
+                    entry.total = total
+                    if detail is not None:
+                        entry.detail = detail
+                    return
             self._meters.append(_Meter(key, label, total, detail))
 
-    def advance(self, key: str, done: int) -> None:
+    def advance(self, key: str, done: int, total: int | None = None) -> None:
         with self._lock:
             for entry in self._meters:
                 if entry.key == key:
                     entry.done = done
+                    if total is not None:
+                        entry.total = total
 
     # --- vram ----------------------------------------------------------------
 
     def sample_vram(self) -> None:
-        """One reading of what this process has reserved on the card.
-
-        `memory_reserved` rather than `memory_allocated`: reserved is what the
-        caching allocator is actually holding against the card, which is the
-        figure that has to fit alongside everything else on the machine.
-        """
-        if not torch.cuda.is_available():
+        if self._vram_gib is None:
+            return
+        gib = self._vram_gib()
+        if gib is None:
             return
         with self._lock:
-            self._vram.append({"at": _now_ms(), "gib": torch.cuda.memory_reserved() / GIB})
+            self._vram.append({"at": _now_ms(), "gib": gib})
+            self._peak_gib = max(self._peak_gib, gib)
             if len(self._vram) > MAX_VRAM_SAMPLES:
                 del self._vram[: len(self._vram) - MAX_VRAM_SAMPLES]
+
+    @property
+    def peak_gib(self) -> float:
+        with self._lock:
+            return self._peak_gib
 
     def _start_sampling(self) -> None:
         self._stop_sampling()
@@ -229,7 +252,9 @@ class JobProgress:
                 if step.parent is not None:
                     by_parent.setdefault(step.parent, []).append(self._render(step))
 
-            steps = [self._render(step, by_parent.get(step.key)) for step in self._steps if step.parent is None]
+            steps = [
+                self._render(step, by_parent.get(step.key)) for step in self._steps if step.parent is None
+            ]
 
             return {
                 "jobId": self._job_id,

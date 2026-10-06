@@ -38,7 +38,7 @@ const FUNCTIONS: StudioFunction[] = [
     key: 'video',
     title: 'Video generation',
     blurb:
-      'LTX-2.5 distilled, eight steps, video and audio in one pass. Text-to-video or a still to animate, with the first-party prompt enhancer and both latent upsamplers.',
+      'MiniMax-H3 with the Turbo LoRA on ComfyUI, picture and stereo audio in one pass. First/last-frame or up to nine references, with a Qwen3-VL prompt enhancer that reads the stills.',
     modality: 'video',
     capability: 'video.generate',
     to: '/generate/video',

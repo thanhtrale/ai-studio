@@ -20,6 +20,14 @@ negative pair, and a negative prompt has nothing to steer away from.
 The LoRA is applied unmerged by default. Merging a low-rank update back into an
 int8 base requantises it away, which is the whole difference between the
 `bypass` and `merge` modes the arm exposes.
+
+Two modes, two checkpoints, one graph shape. `fl2v` is the `fl2va` weights
+under `MiniMaxH3ImageToVideo` -- text alone, or a first and a last frame.
+`ref2v` is the `ref2va` weights under `MiniMaxH3ReferenceToVideo` -- up to
+nine stills the prompt cites as `<Picture 1>` ... `<Picture 9>`, which the clip
+is about rather than which it starts or ends on. Everything downstream of the
+conditioning node -- the LoRA, the shift, the sampler, the two decoders -- is
+the same in both.
 """
 
 from __future__ import annotations
@@ -27,10 +35,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-#: `MiniMaxH3ImageToVideo` takes a first frame, a last frame, or both. Anything
-#: richer -- several images, a reference clip, a voice -- is the `ref2va`
-#: checkpoint and a different node, which this arm does not load.
+#: `MiniMaxH3ImageToVideo` takes a first frame, a last frame, or both.
 MAX_KEYFRAMES = 2
+
+#: `MiniMaxH3ReferenceToVideo` grows up to nine image inputs. Reference clips
+#: and voices are the same node's other inputs, and the studio has no way to
+#: send either yet.
+MAX_REFERENCES = 9
+
+#: The two tasks this arm runs, by the name the console shows. Each is its own
+#: checkpoint and its own conditioning node.
+MODES = ("fl2v", "ref2v")
+DEFAULT_MODE = "fl2v"
+
+#: How `ref2v` sizes a reference before it encodes it. `match` scales each one
+#: down to the clip's own pixel area; `max` keeps a 2048 short edge for
+#: identity, and the reference tokens ride through every sampling step, so it
+#: is several times slower.
+REF_IMAGE_SIZES = ("match", "max")
+DEFAULT_REF_IMAGE_SIZE = "match"
 
 #: Four is the LoRA's floor and eight its ceiling; six is where its own README
 #: puts the knee. Past eight it stops helping and starts over-sharpening.
@@ -117,6 +140,9 @@ class Models:
     video_vae: str
     audio_vae: str
     lora: str
+    #: The `ref2va` checkpoint, for `ref2v` jobs. Empty means the arm was
+    #: started without one, and a `ref2v` job is refused before it is queued.
+    ref_unet: str = ""
     weight_dtype: str = "default"
     clip_device: str = "default"
     #: "bypass" applies the LoRA at run time, "merge" folds it into the
@@ -145,7 +171,10 @@ class Sampling:
     #: The first frame, then the last, named relative to ComfyUI's input
     #: directory. Positional: the second slot is the *last* frame, so a job
     #: that wants only an ending has to say so rather than send one image.
+    #: `ref2v` reads the same list as `<Picture 1>`, `<Picture 2>` ... instead.
     keyframes: list[str] = field(default_factory=list)
+    mode: str = DEFAULT_MODE
+    ref_image_size: str = DEFAULT_REF_IMAGE_SIZE
 
 
 def align_frames(length: int) -> int:
@@ -201,15 +230,74 @@ def _keyframe_inputs(keyframes: list[str]) -> dict[str, Any]:
     return {names[index]: [f"keyframe{index}", 0] for index in range(len(keyframes))}
 
 
+def _reference_inputs(references: list[str]) -> dict[str, Any]:
+    """`ref_images.ref_image_0` ... as an API prompt spells an autogrow input.
+
+    The node's inputs are dynamic: ComfyUI names each grown slot by its path
+    under the group, dotted, and builds the nested dict the node receives from
+    those names. A slot that is not sent simply does not exist.
+    """
+    return {f"ref_images.ref_image_{index}": [f"reference{index}", 0] for index in range(len(references))}
+
+
+def _conditioning(sampling: Sampling) -> dict[str, Any]:
+    if sampling.mode == "ref2v":
+        return {
+            # The audio VAE is wired as well as the video one: the node encodes
+            # reference audio through it, and wiring it now means a voice
+            # reference is an input away rather than a graph change away.
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "inputs": {
+                "clip": [CLIP, 0],
+                "vae": [VIDEO_VAE, 0],
+                "audio_vae": [AUDIO_VAE, 0],
+                "prompt": sampling.prompt,
+                "width": sampling.width,
+                "height": sampling.height,
+                "length": align_frames(sampling.num_frames),
+                "ref_image_size": sampling.ref_image_size,
+                **_reference_inputs(sampling.keyframes),
+            },
+        }
+    return {
+        # One node for both t2va and fl2va: with no keyframe it is
+        # text-to-video, with one or two it is first/last-frame video.
+        "class_type": "MiniMaxH3ImageToVideo",
+        "inputs": {
+            "clip": [CLIP, 0],
+            "vae": [VIDEO_VAE, 0],
+            "prompt": sampling.prompt,
+            "width": sampling.width,
+            "height": sampling.height,
+            "length": align_frames(sampling.num_frames),
+            **_keyframe_inputs(sampling.keyframes),
+        },
+    }
+
+
 def build(models: Models, sampling: Sampling, filename_prefix: str) -> dict[str, Any]:
     """The whole graph for one clip, ready to POST to `/prompt`."""
-    if len(sampling.keyframes) > MAX_KEYFRAMES:
+    if sampling.mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
+    if sampling.mode == "fl2v" and len(sampling.keyframes) > MAX_KEYFRAMES:
         raise ValueError(f"at most {MAX_KEYFRAMES} keyframes (first frame, last frame)")
+    if sampling.mode == "ref2v":
+        if len(sampling.keyframes) > MAX_REFERENCES:
+            raise ValueError(f"at most {MAX_REFERENCES} reference images")
+        if not models.ref_unet:
+            raise ValueError("ref2v needs the ref2va checkpoint, and none is configured")
+        if sampling.ref_image_size not in REF_IMAGE_SIZES:
+            raise ValueError(f"ref_image_size must be one of {', '.join(REF_IMAGE_SIZES)}")
+
+    unet = models.ref_unet if sampling.mode == "ref2v" else models.unet
+    # ref2v's references load under their own ids, so a graph reads as what it
+    # is: `keyframe0` opens a clip, `reference0` is cited by one.
+    image_prefix = "reference" if sampling.mode == "ref2v" else "keyframe"
 
     graph: dict[str, Any] = {
         UNET: {
             "class_type": "UNETLoader",
-            "inputs": {"unet_name": models.unet, "weight_dtype": models.weight_dtype},
+            "inputs": {"unet_name": unet, "weight_dtype": models.weight_dtype},
         },
         LORA: {
             "class_type": "MiniMaxH3TurboLoRA",
@@ -243,20 +331,7 @@ def build(models: Models, sampling: Sampling, filename_prefix: str) -> dict[str,
         },
         VIDEO_VAE: {"class_type": "VAELoader", "inputs": {"vae_name": models.video_vae}},
         AUDIO_VAE: {"class_type": "VAELoader", "inputs": {"vae_name": models.audio_vae}},
-        COND: {
-            # One node for both t2va and fl2va: with no keyframe it is
-            # text-to-video, with one or two it is first/last-frame video.
-            "class_type": "MiniMaxH3ImageToVideo",
-            "inputs": {
-                "clip": [CLIP, 0],
-                "vae": [VIDEO_VAE, 0],
-                "prompt": sampling.prompt,
-                "width": sampling.width,
-                "height": sampling.height,
-                "length": align_frames(sampling.num_frames),
-                **_keyframe_inputs(sampling.keyframes),
-            },
-        },
+        COND: _conditioning(sampling),
         GUIDER: {
             # No CFG. The released checkpoints are CFG-distilled, so there is
             # one transformer call per step and no negative branch.
@@ -321,6 +396,6 @@ def build(models: Models, sampling: Sampling, filename_prefix: str) -> dict[str,
     }
 
     for index, keyframe in enumerate(sampling.keyframes):
-        graph[f"keyframe{index}"] = {"class_type": "LoadImage", "inputs": {"image": keyframe}}
+        graph[f"{image_prefix}{index}"] = {"class_type": "LoadImage", "inputs": {"image": keyframe}}
 
     return graph

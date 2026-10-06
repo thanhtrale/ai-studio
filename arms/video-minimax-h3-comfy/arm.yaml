@@ -20,6 +20,8 @@ launch:
     - "{{port}}"
     - "--diffusion-model"
     - "{{diffusionModel}}"
+    - "--ref2va-model"
+    - "{{ref2vaModel}}"
     - "--text-encoder"
     - "{{textEncoder}}"
     - "--video-vae"

@@ -58,7 +58,7 @@ arms/
   text-qwen36-a3b-llamacpp/  arm.yaml  params.schema.json  bin/  .venv/  <- you place binaries here
   text-gemma4-26b-a4b-llamacpp/ arm.yaml params.schema.json bin/ .venv/
   image-qwen-edit-sdcpp/     arm.yaml  params.schema.json  bin/  .venv/
-  video-ltx25-diffusers/     arm.yaml  params.schema.json  .venv/        <- its own interpreter
+  video-minimax-h3-comfy/    arm.yaml  params.schema.json  vendor/ custom_nodes/ .venv/
   text-llamacpp-cu124/       arm.yaml  params.schema.json               <- a scaffold; see below
 ```
 
@@ -89,7 +89,7 @@ Every view has a URL and every page is rendered on the server first — there is
 | --- | --- |
 | `/` | what the studio can do, one card per function. A card says *no arm discovered* or *no console yet* rather than pretending |
 | `/generate/image` | the Qwen-Image-Edit console. Same two parameters, and a batch: one request, several files, each filed on its own |
-| `/generate/video` | the LTX-2.5 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
+| `/generate/video` | the MiniMax-H3 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
 | `/analyze/block` | a Figma frame and a Jira ticket, read separately and then compared. See below |
 | `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
 
