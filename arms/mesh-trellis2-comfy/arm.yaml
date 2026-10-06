@@ -13,7 +13,7 @@ resources:
 launch:
   cwd: .
   # The image arm's interpreter and ComfyUI checkout, shared rather than
-  # cloned -- the same arrangement as mesh-hunyuan3d-comfy. See README.md.
+  # cloned. See README.md.
   command: ../image-qwen-edit-comfy/.venv/Scripts/python.exe
   args:
     - "-m"

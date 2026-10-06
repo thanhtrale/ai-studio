@@ -69,6 +69,11 @@ export default defineEventHandler(async (event): Promise<MeshGenerateResponse> =
 
   const settings = body.settings;
   if (settings?.kind !== 'model') invalid('settings must describe a mesh');
+  // `hunyuan3d` is still a valid engine in the library's older records, but
+  // the untextured ComfyUI arm that ran it is gone.
+  if (settings.engine !== 'trellis2' && settings.engine !== 'hunyuan3d-paint') {
+    invalid('engine must be trellis2 or hunyuan3d-paint');
+  }
   const batch = Math.trunc(settings.batch ?? 1);
   if (!Number.isFinite(batch) || batch < 1 || batch > MAX_BATCH) {
     invalid(`batch must be between 1 and ${MAX_BATCH}`);
@@ -124,10 +129,16 @@ export default defineEventHandler(async (event): Promise<MeshGenerateResponse> =
             }
           : {
               steps: settings.steps,
-              sampler: settings.sampler,
-              scheduler: settings.scheduler,
               octreeResolution: settings.octreeResolution,
-              latentTokens: settings.latentTokens,
+              texture: settings.texture,
+              paintViews: settings.paintViews,
+              paintResolution: settings.paintResolution,
+              paintSteps: settings.paintSteps,
+              paintGuidance: settings.paintGuidance,
+              textureSize: settings.textureSize,
+              upscale: settings.upscale,
+              compressTextures: settings.compressTextures,
+              textureQuality: settings.textureQuality,
             }),
       },
     });

@@ -225,6 +225,18 @@ const features = computed(() => {
               <span v-if="model.bakeOcclusion">&middot; AO</span>
             </dd>
           </div>
+          <div v-else-if="model?.engine === 'hunyuan3d-paint'" class="flex justify-between gap-3">
+            <dt class="text-slate-500">Hunyuan3D Paint</dt>
+            <dd class="text-right text-slate-300">
+              {{ model.steps }} step &middot; cfg {{ model.cfgScale }} &middot; octree {{ model.octreeResolution }}<br />
+              ≤{{ formatCount(model.targetFaces) }} faces
+              <template v-if="model.texture !== false">
+                <br />{{ model.paintViews }} views at {{ model.paintResolution }} &middot; {{ model.textureSize }}px
+                <span v-if="model.upscale">&middot; ESRGAN</span>
+              </template>
+              <template v-else><br />shape only</template>
+            </dd>
+          </div>
           <div v-else-if="model" class="flex justify-between gap-3">
             <dt class="text-slate-500">Shape</dt>
             <dd class="text-right text-slate-300">

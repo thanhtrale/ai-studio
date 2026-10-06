@@ -1,0 +1,52 @@
+id: mesh-hunyuan3d-paint
+name: Hunyuan3D 2.1 image-to-textured-mesh (shape + PBR paint)
+modality: mesh
+protocol: native
+lifecycle: resident
+capabilities:
+  - mesh.generate
+resources:
+  gpu: exclusive
+  # Only one stage is on the card at a time. Shape is the 7.4 GB DiT plus the
+  # octree decode; paint is the 2.5D UNet, DINOv2-giant and Real-ESRGAN in fp16
+  # with twelve views' activations, which is the peak.
+  vramEstimateMb: 14000
+launch:
+  cwd: .
+  # This arm's own venv: diffusers, transformers, rembg and the mesh tools are
+  # nothing the ComfyUI arms need. See README.md.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_hy3dpaint"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--shape-dir"
+    - "{{shapeDir}}"
+    - "--paint-dir"
+    - "{{paintDir}}"
+    - "--dino-dir"
+    - "{{dinoDir}}"
+    - "--upscaler"
+    - "{{upscaler}}"
+    - "--rembg-dir"
+    - "{{rembgDir}}"
+    - "--rembg-model"
+    - "{{rembgModel}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

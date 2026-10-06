@@ -5,13 +5,12 @@ photograph in, a GLB with baked PBR maps out — base colour, metallic,
 roughness, and optionally a normal map and ambient occlusion — which three.js
 loads as a `MeshStandardMaterial` with no code of its own.
 
-It is the textured sibling of `mesh-hunyuan3d-comfy`, built the same way: a
-small Python process with no dependencies of its own that keeps a ComfyUI
+It is a small Python process with no dependencies of its own that keeps a ComfyUI
 child warm, builds the graph, and turns the child's log into the timeline.
 
 ## No runtime of its own
 
-Like the Hunyuan3D arm, this one runs on the `image-qwen-edit-comfy` arm's
+This arm runs on the `image-qwen-edit-comfy` arm's
 interpreter and ComfyUI checkout (`fb2315f1`), which has TRELLIS.2 natively —
 `comfy/ldm/trellis2`, `comfy_extras/nodes_trellis2.py` and the mesh
 post-processing nodes the bake needs. Install that arm first.

@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Hunyuan3D 2.1 shape + paint start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "shapeDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "tencent/Hunyuan3D-2.1's hunyuan3d-dit-v2-1 folder: config.yaml and model.fp16.ckpt, which holds the DiT, the shape VAE and DINOv2-L.",
+      "default": "models/hunyuan3d-2.1-official/hunyuan3d-dit-v2-1"
+    },
+    "paintDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "tencent/Hunyuan3D-2.1's hunyuan3d-paintpbr-v2-1 folder, a diffusers pipeline.",
+      "default": "models/hunyuan3d-2.1-official/hunyuan3d-paintpbr-v2-1"
+    },
+    "dinoDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "facebook/dinov2-giant, the image features the paint model is conditioned on.",
+      "default": "models/dinov2-giant"
+    },
+    "upscaler": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Real-ESRGAN x4, run on every painted view before it is baked.",
+      "default": "models/realesrgan/RealESRGAN_x4plus.pth"
+    },
+    "rembgDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where rembg keeps its ONNX cut-out models. It downloads the chosen one here on first use.",
+      "default": "models/rembg"
+    },
+    "rembgModel": {
+      "type": "string",
+      "enum": ["birefnet-general", "birefnet-general-lite", "u2net", "isnet-general-use"],
+      "description": "The cut-out model. birefnet-general is the same network the ComfyUI mesh arms use.",
+      "default": "birefnet-general"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's reference image and meshPath are confined to.",
+      "default": "inputs"
+    }
+  }
+}

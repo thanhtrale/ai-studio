@@ -1,34 +1,30 @@
-"""Loopback HTTP server for the ComfyUI-backed Hunyuan3D mesh arm.
+"""Loopback HTTP server for the Hunyuan3D 2.1 shape-and-paint arm.
 
-The contract is the studio's, not ComfyUI's: `/healthz`, `/generate`,
-`/progress`, `/stats`. Translating between the two is the whole job of this
-arm, and keeping the translation here means the supervisor stays ignorant of
-what a node graph is -- which is what lets the next arm be something else
-entirely.
-
-The child is started on the first job rather than at startup, for the same
-reason the other ComfyUI arms defer it: a health check gated on importing torch
-and scanning every node module would time out, and a started arm is meant to be
-reachable, not warm.
+The contract is the studio's: `/healthz`, `/generate`, `/progress`, `/stats`.
+Unlike the ComfyUI arms there is no child process: the models are torch
+modules in this one, loaded on the first job that needs each -- the shape
+model on the first shape, the paint models on the first texture -- so a
+started arm answers its health check at once and a shape-only job never pays
+for the paint stage's 9 GB.
 """
 
 from __future__ import annotations
 
+import gc
 import json
+import os
 import threading
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from . import __version__, vram
+from . import __version__
+from .engine import Engine
 from .generation import JobError, generate, parse_job
-from .graph import Models
 from .progress import JobProgress
-from .runtime import ChildFailed, ComfyServer, LoadConfig
 
-ARM_ID = "mesh-hunyuan3d-comfy"
-# Reference images arrive as paths, not bytes, so a job body stays small.
+ARM_ID = "mesh-hunyuan3d-paint"
 MAX_BODY_BYTES = 256 * 1024
 
 
@@ -37,48 +33,29 @@ class Busy(RuntimeError):
 
 
 class ArmState:
-    """Owns the child process and serialises access to the GPU."""
+    """Owns the models and serialises access to the GPU."""
 
-    def __init__(self, config: LoadConfig, out_dir: Path, in_dir: Path) -> None:
-        self.config = config
+    def __init__(self, engine: Engine, out_dir: Path, in_dir: Path) -> None:
+        self.engine = engine
         self.out_dir = out_dir
         self.in_dir = in_dir
-        # One timeline per arm, reset per job: the log reader writes to it from
-        # its own thread for as long as the child lives.
         self.progress = JobProgress(vram_gib=self.vram_gib)
-        # Decided once, when there is a child to ask about. Until then there is
-        # nothing to measure and no way to know what kind of answer exists.
-        self.vram_scope: vram.Scope | None = None
-        self.server = ComfyServer(config, self.progress)
-        self.models = Models(checkpoint=config.checkpoint.name, bg_model=config.bg_model.name)
-        # One generation at a time. ComfyUI would queue a second prompt itself,
-        # but then two jobs would share one timeline and neither would read right.
         self._gpu = threading.Lock()
 
     def vram_gib(self) -> float | None:
-        """One reading, of whatever this machine is able to report.
+        """What torch holds on the card for this process -- models, cache, activations."""
+        try:
+            import torch
 
-        A GeForce card under Windows will not attribute memory to a process, so
-        on this machine the honest answer is a whole-card figure -- and the
-        scope travels with every number so nothing reads it as this arm's own
-        share. See `vram.py`.
-        """
-        pid = self.server.pid
-        if pid is None:
+            if not torch.cuda.is_available():
+                return None
+            return torch.cuda.memory_reserved() / 2**30
+        except Exception:  # noqa: BLE001 - a meter must never fail a job
             return None
-
-        if self.vram_scope is None:
-            self.vram_scope = vram.probe(pid)
-
-        if self.vram_scope == "process":
-            return vram.used_gib({pid})
-        if self.vram_scope == "card":
-            return vram.card_gib()
-        return None
 
     @property
     def loaded(self) -> bool:
-        return self.server.running
+        return self.engine.shape_loaded or self.engine.paint_loaded
 
     def run(self, body: dict[str, Any]) -> dict[str, Any]:
         job = parse_job(body, self.out_dir, self.in_dir)
@@ -86,40 +63,38 @@ class ArmState:
         job_id = raw_id if isinstance(raw_id, str) and raw_id else None
 
         if not self._gpu.acquire(blocking=False):
-            # Before `begin`, so a rejected job cannot wipe the timeline of the
-            # one that is actually running.
             raise Busy("a generation is already running")
 
         try:
             self.progress.begin(job_id)
-            if not self.server.running:
-                with self.progress.step("start", "Start ComfyUI", self.config.checkpoint.name):
-                    self.server.start()
-                print(f"[{ARM_ID}] ComfyUI up on port {self.server.port}", flush=True)
-                # One reading straight away, so the first job's chart starts at
-                # the load rather than at the sampler thread's next tick.
-                self.progress.sample_vram()
+            if job.mesh_path is None and not self.engine.shape_loaded:
+                with self.progress.step("load-shape", "Load shape model", "hunyuan3d-dit-v2-1 · fp16"):
+                    self.engine.load_shape()
+            if job.texture and not self.engine.paint_loaded:
+                with self.progress.step(
+                    "load-paint", "Load paint models", "paintpbr-v2-1 · DINOv2-giant · Real-ESRGAN"
+                ):
+                    self.engine.load_paint()
+            self.progress.sample_vram()
 
-            report = generate(self.server, self.models, job, self.progress)
-            # After the job, not before: the scope is discovered by taking a
-            # reading, and the first reading happens once the child is up.
-            report.vram_scope = self.vram_scope or "unavailable"
+            report = generate(self.engine, job, self.progress)
             self.progress.finish()
         except Exception as error:
             self.progress.fail(f"{type(error).__name__}: {error}")
             raise
         finally:
+            gc.collect()
             self._gpu.release()
 
         print(
             f"[{ARM_ID}] wrote {len(report.meshes)} mesh(es) in {report.seconds_total:.1f}s "
-            f"(peak vram {report.peak_vram_gib:.2f} GiB, scope {report.vram_scope})",
+            f"(peak vram {report.peak_vram_gib:.2f} GiB)",
             flush=True,
         )
         return asdict(report)
 
     def shutdown(self) -> None:
-        self.server.stop()
+        pass
 
 
 def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
@@ -137,7 +112,7 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                         "arm": ARM_ID,
                         "version": __version__,
                         "loaded": state.loaded,
-                        "model": state.config.checkpoint.name,
+                        "model": "hunyuan3d-2.1 + paintpbr-2.1",
                     },
                 )
                 return
@@ -147,16 +122,15 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/stats":
-                pid = state.server.pid
                 self._respond(
                     200,
                     {
                         "loaded": state.loaded,
-                        "pid": pid,
-                        "port": state.server.port,
+                        "shapeLoaded": state.engine.shape_loaded,
+                        "paintLoaded": state.engine.paint_loaded,
+                        "pid": os.getpid(),
                         "vramGib": state.vram_gib(),
-                        "vramScope": state.vram_scope,
-                        "tail": state.server.tail().splitlines()[-10:],
+                        "vramScope": "process",
                     },
                 )
                 return
@@ -188,8 +162,6 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
                 self._error(400, "invalid_params", str(error))
             except Busy as error:
                 self._error(409, "arm_busy", str(error))
-            except ChildFailed as error:
-                self._error(500, "arm_error", str(error))
             except Exception as error:  # noqa: BLE001 - the arm must not die on one bad job
                 self._error(500, "arm_error", f"{type(error).__name__}: {error}")
 
@@ -213,16 +185,11 @@ def build_handler(state: ArmState) -> type[BaseHTTPRequestHandler]:
 def serve(host: str, port: int, state: ArmState) -> None:
     server = ThreadingHTTPServer((host, port), build_handler(state))
     print(f"[{ARM_ID}] listening on http://{host}:{port}", flush=True)
-    print(
-        f"[{ARM_ID}] model={state.config.checkpoint} out={state.out_dir} in={state.in_dir}",
-        flush=True,
-    )
+    print(f"[{ARM_ID}] out={state.out_dir} in={state.in_dir}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        # The child holds the card. Leaving it behind would strand the GPU
-        # against an arm the supervisor has already stopped.
         state.shutdown()

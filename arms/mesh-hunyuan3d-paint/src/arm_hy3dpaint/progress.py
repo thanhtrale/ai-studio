@@ -1,12 +1,8 @@
 """What the current job is doing, readable while it is doing it.
 
-The same shape the video arm reports, for the same reason: a job crosses three
-processes and none of them sees the whole of it. The one difference is the VRAM
-meter. There is no torch in this arm -- the model lives in a child process
-written in C++ -- so the figure comes from nvidia-smi's per-process accounting
-instead of `torch.memory_reserved`. It is still "what this arm holds" rather
-than "what the card holds", which is what makes it comparable to the machine
-meter the supervisor samples beside it.
+The same shape every arm reports, so the studio draws one timeline for all of
+them. The VRAM meter here is `torch.cuda.memory_reserved`: unlike the ComfyUI
+arms, the models live in this process, so torch can say exactly what it holds.
 """
 
 from __future__ import annotations

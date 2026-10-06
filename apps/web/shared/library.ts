@@ -159,7 +159,7 @@ export interface VideoJobSettings extends CommonSettings {
 export type VideoMode = 'fl2v' | 'ref2v';
 
 /** Which model made a mesh. The two take different knobs. */
-export type MeshEngine = 'hunyuan3d' | 'trellis2';
+export type MeshEngine = 'hunyuan3d' | 'trellis2' | 'hunyuan3d-paint';
 
 /**
  * A mesh made from one photograph.
@@ -199,8 +199,18 @@ export interface ModelJobSettings {
   bakeOcclusion?: boolean;
   /** TRELLIS.2: whether the baked maps were re-encoded as WebP. */
   compressTextures?: boolean;
-  /** TRELLIS.2: the WebP quality, 1-100; 100 is lossless. */
+  /** TRELLIS.2 and Hunyuan3D Paint: the WebP quality, 1-100; 100 is lossless. */
   textureQuality?: number;
+  /** Hunyuan3D Paint: whether the paint stage ran at all. */
+  texture?: boolean;
+  /** Hunyuan3D Paint: views drawn by the multiview model, 6 to 9. */
+  paintViews?: number;
+  /** Hunyuan3D Paint: edge of each drawn view, 512 or 768. */
+  paintResolution?: number;
+  paintSteps?: number;
+  paintGuidance?: number;
+  /** Hunyuan3D Paint: Real-ESRGAN x4 on each view before baking. */
+  upscale?: boolean;
   /** Faces to decimate to; 0 kept the raw surface (Hunyuan3D only). */
   targetFaces: number;
   /** Whether BiRefNet cut the object out of its photograph first. */
@@ -505,6 +515,7 @@ const ARM_TAGS: Record<string, readonly string[]> = {
   'video-ltx25-diffusers': ['diffusers', 'ltx2.5'],
   'mesh-hunyuan3d-comfy': ['comfy', 'hunyuan3d2.1'],
   'mesh-trellis2-comfy': ['comfy', 'trellis2'],
+  'mesh-hunyuan3d-paint': ['hunyuan3d2.1', 'paint'],
 };
 
 /**

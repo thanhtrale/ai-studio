@@ -2,8 +2,9 @@
 /**
  * The 3D console: one photograph in, a GLB a three.js page can load out.
  *
- * Two engines behind one form. Hunyuan3D gives a sharp, untextured shape;
- * TRELLIS.2 gives a textured one through four sampling passes and a bake. The
+ * Two engines behind one form, both textured. TRELLIS.2 gets there through
+ * four sampling passes and a bake; Hunyuan3D Paint makes Hunyuan3D 2.1's
+ * shape and then runs Tencent's multiview PBR paint stage on it. The
  * arm's own parameter schema says which it is, and the form shows that
  * engine's knobs -- the shared ones (seed, guidance, faces, cut-out) stay put.
  *
@@ -63,34 +64,6 @@ const VRAM_SCOPE: Record<string, string> = {
 };
 
 /**
- * Whole recipes, because the knobs trade against each other: a fine octree
- * decimated to ten thousand faces is wasted decode time, and a coarse one left
- * raw is a heavy file with no detail in it.
- */
-const HUNYUAN_PRESETS: { name: string; hint: string; values: Partial<ModelJobSettings> }[] = [
-  {
-    name: 'Draft',
-    hint: 'Coarse and quick — for checking the photo reads as an object at all.',
-    values: { steps: 20, octreeResolution: 192, latentTokens: 3072, targetFaces: 20_000 },
-  },
-  {
-    name: 'Web',
-    hint: 'The blueprint’s sampling, decimated to what a product page can stream.',
-    values: { steps: 30, octreeResolution: 256, latentTokens: 4096, targetFaces: 50_000 },
-  },
-  {
-    name: 'Detailed',
-    hint: 'Finer surface, still decimated — for a hero model or a close-up.',
-    values: { steps: 50, octreeResolution: 384, latentTokens: 4096, targetFaces: 200_000 },
-  },
-  {
-    name: 'Raw',
-    hint: 'No decimation: the surface as extracted, for retopology in a DCC tool.',
-    values: { steps: 30, octreeResolution: 256, latentTokens: 4096, targetFaces: 0 },
-  },
-];
-
-/**
  * TRELLIS.2's recipes. Web is Microsoft's default sampling with an output a
  * page can carry; the template's own 700K faces and 4096 maps are a 50 MB file.
  */
@@ -136,6 +109,70 @@ const TRELLIS_PRESETS: { name: string; hint: string; values: Partial<ModelJobSet
   },
 ];
 
+/**
+ * Hunyuan3D Paint's recipes. Web is Tencent's own: 40K faces, six views at
+ * 512 -- the paint stage is drawn per view, so faces cost unwrap time, not paint.
+ */
+const PAINT_PRESETS: { name: string; hint: string; values: Partial<ModelJobSettings> }[] = [
+  {
+    name: 'Draft',
+    hint: 'Fewer steps, a 1K texture and no upscale — for checking the photo reads at all.',
+    values: {
+      steps: 20,
+      octreeResolution: 192,
+      targetFaces: 20_000,
+      paintViews: 6,
+      paintResolution: 512,
+      textureSize: 1024,
+      upscale: false,
+    },
+  },
+  {
+    name: 'Web',
+    hint: 'Tencent’s defaults: 40K faces, six views at 512, upscaled and baked to a 2K texture.',
+    values: {
+      steps: 30,
+      octreeResolution: 256,
+      targetFaces: 40_000,
+      paintViews: 6,
+      paintResolution: 512,
+      textureSize: 2048,
+      upscale: true,
+    },
+  },
+  {
+    name: 'Detailed',
+    hint: 'Octree 384, 100K faces, eight views at 768 and a 4K texture — the official app’s paint settings.',
+    values: {
+      steps: 50,
+      octreeResolution: 384,
+      targetFaces: 100_000,
+      paintViews: 8,
+      paintResolution: 768,
+      textureSize: 4096,
+      upscale: true,
+    },
+  },
+];
+
+const PAINT_VIEWS = [
+  { value: '6', label: '6 — four sides, top and bottom' },
+  { value: '7', label: '7' },
+  { value: '8', label: '8 — the official app’s' },
+  { value: '9', label: '9' },
+];
+
+const PAINT_RESOLUTIONS = [
+  { value: '512', label: '512 — the default' },
+  { value: '768', label: '768 — sharper, more of the card' },
+];
+
+const PAINT_TEXTURE_SIZES = [
+  { value: '1024', label: '1024' },
+  { value: '2048', label: '2048 — web' },
+  { value: '4096', label: '4096' },
+];
+
 const FACE_PRESETS = [10_000, 25_000, 50_000, 100_000, 200_000];
 
 const SHAPE_RESOLUTIONS = [
@@ -167,27 +204,6 @@ const OCTREES = [
   { value: '384', label: '384 — sharpest, ~3× the decode' },
 ];
 
-const TOKENS = [
-  { value: '1024', label: '1024' },
-  { value: '2048', label: '2048' },
-  { value: '3072', label: '3072' },
-  { value: '4096', label: '4096 — the blueprint’s' },
-];
-
-const SAMPLERS = [
-  { value: 'euler', label: 'euler — the blueprint’s' },
-  { value: 'euler_ancestral', label: 'euler_ancestral' },
-  { value: 'dpmpp_2m', label: 'dpmpp_2m' },
-  { value: 'heun', label: 'heun' },
-];
-
-const SCHEDULERS = [
-  { value: 'normal', label: 'normal — the blueprint’s' },
-  { value: 'simple', label: 'simple' },
-  { value: 'beta', label: 'beta' },
-  { value: 'karras', label: 'karras' },
-];
-
 const VRAM_MODES = [
   { value: 'dynamic', label: 'dynamic — ComfyUI decides what to stream' },
   { value: 'highvram', label: 'highvram — keep everything resident' },
@@ -199,10 +215,16 @@ const armId = ref<string>('');
 
 type Schema = { properties?: Record<string, { default?: unknown }> } | null;
 
-function engineOf(candidate: ArmSummary): MeshEngine {
-  // Read off the arm's schema rather than its id: an arm that loads a texture
-  // VAE is one that bakes textures, whatever it is called.
-  return (candidate.paramsSchema as Schema)?.properties?.['textureVae'] ? 'trellis2' : 'hunyuan3d';
+/**
+ * The engines this console drives. `hunyuan3d` stays in `MeshEngine` for the
+ * library's older records, made by the untextured ComfyUI arm that is gone.
+ */
+type ConsoleEngine = Exclude<MeshEngine, 'hunyuan3d'>;
+
+function engineOf(candidate: ArmSummary): ConsoleEngine {
+  // Read off the arm's schema rather than its id: an arm with a paint model
+  // paints, one that loads a texture VAE bakes.
+  return (candidate.paramsSchema as Schema)?.properties?.['paintDir'] ? 'hunyuan3d-paint' : 'trellis2';
 }
 
 watch(
@@ -218,25 +240,23 @@ watch(
 const armOptions = computed(() => meshArms.value.map((arm) => ({ value: arm.id, label: arm.name })));
 const arm = computed(() => meshArms.value.find((candidate) => candidate.id === armId.value) ?? null);
 
-const engine = computed<MeshEngine>(() => (arm.value ? engineOf(arm.value) : 'hunyuan3d'));
-const presets = computed(() => (engine.value === 'trellis2' ? TRELLIS_PRESETS : HUNYUAN_PRESETS));
+const engine = computed<ConsoleEngine>(() => (arm.value ? engineOf(arm.value) : 'trellis2'));
+const presets = computed(() => (engine.value === 'trellis2' ? TRELLIS_PRESETS : PAINT_PRESETS));
 
 const armHint = computed(() => {
   if (!arm.value) return 'No arm declares mesh.generate. Check capabilities in a manifest under arms/.';
   const properties = (arm.value.paramsSchema as Schema)?.properties;
+  if (engine.value === 'hunyuan3d-paint') return 'hunyuan3d-dit-v2-1 + paintpbr-v2-1 · textured (PBR)';
   const model = properties?.['checkpoint']?.default ?? properties?.['diffusionModel']?.default;
   const name = typeof model === 'string' ? (model.split('/').pop() ?? model) : arm.value.id;
-  return engine.value === 'trellis2' ? `${name} · textured` : `${name} · shape only`;
+  return `${name} · textured`;
 });
 
 const vramMode = ref('dynamic');
 
 const steps = ref(30);
 const cfgScale = ref(5);
-const sampler = ref('euler');
-const scheduler = ref('normal');
 const octree = ref('256');
-const tokens = ref('4096');
 const targetFaces = ref(50_000);
 const removeBackground = ref(true);
 // TRELLIS.2's own: four passes, the refine resolution, and the bake.
@@ -248,6 +268,13 @@ const shapeResolution = ref('1024');
 const textureSize = ref('2048');
 const bakeNormals = ref(true);
 const bakeOcclusion = ref(true);
+// Hunyuan3D Paint's own: the paint stage, and whether to run it at all.
+const paintTexture = ref(true);
+const paintViews = ref('6');
+const paintResolution = ref('512');
+const paintSteps = ref(15);
+const paintGuidance = ref(3);
+const upscale = ref(true);
 /**
  * WebP quality for the baked maps, 1-100. 100 is lossless -- every pixel as
  * baked, about a quarter smaller than PNG -- and is the default, so nothing is
@@ -284,29 +311,31 @@ const activePreset = computed(
     presets.value.find((preset) => {
       const values = preset.values;
       if (values.targetFaces !== targetFaces.value) return false;
-      if (engine.value === 'trellis2') {
+      if (engine.value === 'hunyuan3d-paint') {
         return (
-          values.structureSteps === structureSteps.value &&
-          values.shapeSteps === shapeSteps.value &&
-          values.refineSteps === refineSteps.value &&
-          values.textureSteps === textureSteps.value &&
-          `${values.shapeResolution}` === shapeResolution.value &&
-          `${values.textureSize}` === textureSize.value
+          values.steps === steps.value &&
+          `${values.octreeResolution}` === octree.value &&
+          `${values.paintViews}` === paintViews.value &&
+          `${values.paintResolution}` === paintResolution.value &&
+          `${values.textureSize}` === textureSize.value &&
+          values.upscale === upscale.value
         );
       }
       return (
-        values.steps === steps.value &&
-        `${values.octreeResolution}` === octree.value &&
-        `${values.latentTokens}` === tokens.value
+        values.structureSteps === structureSteps.value &&
+        values.shapeSteps === shapeSteps.value &&
+        values.refineSteps === refineSteps.value &&
+        values.textureSteps === textureSteps.value &&
+        `${values.shapeResolution}` === shapeResolution.value &&
+        `${values.textureSize}` === textureSize.value
       );
     })?.name ?? null,
 );
 
-function applyPreset(preset: (typeof HUNYUAN_PRESETS)[number]): void {
+function applyPreset(preset: (typeof TRELLIS_PRESETS)[number]): void {
   const values = preset.values;
   if (values.steps !== undefined) steps.value = values.steps;
   if (values.octreeResolution !== undefined) octree.value = `${values.octreeResolution}`;
-  if (values.latentTokens !== undefined) tokens.value = `${values.latentTokens}`;
   if (values.targetFaces !== undefined) targetFaces.value = values.targetFaces;
   if (values.structureSteps !== undefined) structureSteps.value = values.structureSteps;
   if (values.shapeSteps !== undefined) shapeSteps.value = values.shapeSteps;
@@ -314,6 +343,9 @@ function applyPreset(preset: (typeof HUNYUAN_PRESETS)[number]): void {
   if (values.textureSteps !== undefined) textureSteps.value = values.textureSteps;
   if (values.shapeResolution !== undefined) shapeResolution.value = `${values.shapeResolution}`;
   if (values.textureSize !== undefined) textureSize.value = `${values.textureSize}`;
+  if (values.paintViews !== undefined) paintViews.value = `${values.paintViews}`;
+  if (values.paintResolution !== undefined) paintResolution.value = `${values.paintResolution}`;
+  if (values.upscale !== undefined) upscale.value = values.upscale;
 }
 
 /** The record the form was last filled from; see `restoreKey`. */
@@ -334,7 +366,7 @@ watch(
     // unless a restored run already filled the form in.
     if (previous === undefined && restored !== null) return;
     cfgScale.value = current === 'trellis2' ? 7.5 : 5;
-    targetFaces.value = current === 'trellis2' ? 100_000 : 50_000;
+    targetFaces.value = current === 'trellis2' ? 100_000 : 40_000;
   },
   { immediate: true },
 );
@@ -358,10 +390,7 @@ function restoreFrom(meta: MediaMeta): void {
   if (!isModelSettings(settings)) return;
   steps.value = settings.steps;
   cfgScale.value = settings.cfgScale;
-  if (settings.sampler) sampler.value = settings.sampler;
-  if (settings.scheduler) scheduler.value = settings.scheduler;
   if (settings.octreeResolution) octree.value = `${settings.octreeResolution}`;
-  if (settings.latentTokens) tokens.value = `${settings.latentTokens}`;
   if (settings.structureSteps) structureSteps.value = settings.structureSteps;
   if (settings.shapeSteps) shapeSteps.value = settings.shapeSteps;
   if (settings.refineSteps) refineSteps.value = settings.refineSteps;
@@ -371,6 +400,12 @@ function restoreFrom(meta: MediaMeta): void {
   if (settings.bakeNormals !== undefined) bakeNormals.value = settings.bakeNormals;
   if (settings.bakeOcclusion !== undefined) bakeOcclusion.value = settings.bakeOcclusion;
   if (settings.textureQuality !== undefined) textureQuality.value = settings.textureQuality;
+  if (settings.texture !== undefined) paintTexture.value = settings.texture;
+  if (settings.paintViews) paintViews.value = `${settings.paintViews}`;
+  if (settings.paintResolution) paintResolution.value = `${settings.paintResolution}`;
+  if (settings.paintSteps) paintSteps.value = settings.paintSteps;
+  if (settings.paintGuidance) paintGuidance.value = settings.paintGuidance;
+  if (settings.upscale !== undefined) upscale.value = settings.upscale;
   targetFaces.value = settings.targetFaces;
   removeBackground.value = settings.removeBackground;
   seed.value = `${settings.seed}`;
@@ -449,10 +484,16 @@ async function generate(): Promise<void> {
       : {
           ...common,
           steps: steps.value,
-          sampler: sampler.value,
-          scheduler: scheduler.value,
           octreeResolution: Number(octree.value),
-          latentTokens: Number(tokens.value),
+          texture: paintTexture.value,
+          paintViews: Number(paintViews.value),
+          paintResolution: Number(paintResolution.value),
+          paintSteps: paintSteps.value,
+          paintGuidance: paintGuidance.value,
+          textureSize: Number(textureSize.value),
+          upscale: upscale.value,
+          compressTextures: true,
+          textureQuality: textureQuality.value,
         };
 
   const jobId = crypto.randomUUID();
@@ -461,10 +502,14 @@ async function generate(): Promise<void> {
     referenceId: referenceId.value,
     settings,
     ...(note.value.trim() ? { note: note.value.trim() } : {}),
-    armParams: {
-      vramMode: vramMode.value,
-      ...(engine.value === 'trellis2' ? { diffusionModel: transformer.value } : {}),
-    },
+    // The paint arm has no ComfyUI, so no VRAM strategy to pass it.
+    armParams:
+      engine.value === 'hunyuan3d-paint'
+        ? {}
+        : {
+            vramMode: vramMode.value,
+            ...(engine.value === 'trellis2' ? { diffusionModel: transformer.value } : {}),
+          },
   };
 
   follow(jobId);
@@ -605,23 +650,24 @@ async function generate(): Promise<void> {
         </p>
       </fieldset>
 
-      <fieldset v-if="engine === 'hunyuan3d'" class="space-y-3">
-        <legend class="text-sm font-medium text-slate-200">Surface</legend>
+      <fieldset v-if="engine === 'hunyuan3d-paint'" class="space-y-3">
+        <legend class="text-sm font-medium text-slate-200">Shape</legend>
         <div class="grid grid-cols-2 gap-3">
-          <UiField label="Octree" for="octree">
-            <UiSelect id="octree" v-model="octree" :options="OCTREES" />
+          <UiField label="Octree" for="octree-p">
+            <UiSelect id="octree-p" v-model="octree" :options="OCTREES" />
           </UiField>
-          <UiField label="Latent tokens" for="tokens">
-            <UiSelect id="tokens" v-model="tokens" :options="TOKENS" />
+          <UiField label="Steps" for="steps-p">
+            <UiNumberInput id="steps-p" v-model="steps" :min="1" :max="100" />
+          </UiField>
+          <UiField label="CFG scale" for="cfg-p">
+            <UiNumberInput id="cfg-p" v-model="cfgScale" :min="0" :max="30" :step="0.5" />
+          </UiField>
+          <UiField label="Seed" for="seed-p">
+            <UiInput id="seed-p" v-model="seed" placeholder="empty = random" />
           </UiField>
         </div>
-        <p class="text-xs text-slate-500">
-          The octree is how finely the shape is marched into triangles; the tokens are how much shape the
-          model can describe. Raising the octree past what the tokens hold only adds faces, not detail.
-        </p>
-
-        <UiField label="Decimate to (faces)" for="faces">
-          <UiNumberInput id="faces" v-model="targetFaces" :min="0" :max="2000000" :step="1000" />
+        <UiField label="Decimate to (faces)" for="faces-p">
+          <UiNumberInput id="faces-p" v-model="targetFaces" :min="5000" :max="300000" :step="1000" />
           <div class="mt-2 flex flex-wrap gap-1.5">
             <UiButton
               v-for="count in FACE_PRESETS"
@@ -632,39 +678,68 @@ async function generate(): Promise<void> {
             >
               {{ formatCount(count) }}
             </UiButton>
-            <UiButton size="sm" :active="targetFaces === 0" @click="targetFaces = 0">raw</UiButton>
           </div>
           <template #hint>
-            Surface nets at octree 256 give a few hundred thousand faces. 20–100K is a comfortable range for
-            three.js on a phone; 0 keeps the raw surface.
+            The texture is painted onto this mesh. Tencent uses 40K; more faces mostly cost UV-unwrap time.
           </template>
         </UiField>
       </fieldset>
 
-      <fieldset v-if="engine === 'hunyuan3d'" class="space-y-3 border-t border-white/10 pt-4">
-        <legend class="text-sm font-medium text-slate-200">Sampling</legend>
-        <div class="grid grid-cols-2 gap-3">
-          <UiField label="Steps" for="steps">
-            <UiNumberInput id="steps" v-model="steps" :min="1" :max="100" />
+      <fieldset v-if="engine === 'hunyuan3d-paint'" class="space-y-3 border-t border-white/10 pt-4">
+        <legend class="text-sm font-medium text-slate-200">Paint</legend>
+        <UiCheckbox
+          v-model="paintTexture"
+          label="Paint a texture"
+          hint="Off gives the bare shape, as the ComfyUI arm does, without loading the paint models."
+        />
+        <template v-if="paintTexture">
+          <div class="grid grid-cols-2 gap-3">
+            <UiField label="Views" for="paint-views">
+              <UiSelect id="paint-views" v-model="paintViews" :options="PAINT_VIEWS" />
+            </UiField>
+            <UiField label="View size" for="paint-res">
+              <UiSelect id="paint-res" v-model="paintResolution" :options="PAINT_RESOLUTIONS" />
+            </UiField>
+            <UiField label="Paint steps" for="paint-steps">
+              <UiNumberInput id="paint-steps" v-model="paintSteps" :min="1" :max="50" />
+            </UiField>
+            <UiField label="Paint CFG" for="paint-cfg">
+              <UiNumberInput id="paint-cfg" v-model="paintGuidance" :min="1" :max="10" :step="0.5" />
+            </UiField>
+            <UiField label="Texture size" for="tex-size-p">
+              <UiSelect id="tex-size-p" v-model="textureSize" :options="PAINT_TEXTURE_SIZES" />
+            </UiField>
+          </div>
+          <UiCheckbox
+            v-model="upscale"
+            label="Upscale views first"
+            hint="Real-ESRGAN x4 on every painted view before it is baked — sharper texels for about a second per view."
+          />
+          <UiField label="Texture quality" for="tex-quality-p">
+            <div class="flex items-center gap-3">
+              <input
+                id="tex-quality-p"
+                v-model.number="textureQuality"
+                type="range"
+                min="1"
+                max="100"
+                step="1"
+                class="min-w-0 flex-1 accent-indigo-500"
+                data-testid="texture-quality-p"
+              />
+              <span class="w-28 shrink-0 text-right font-mono text-xs text-slate-300">{{ qualityLabel }}</span>
+            </div>
+            <template #hint>
+              Base colour and metallic-roughness are re-encoded as WebP, which three.js reads natively. 100%
+              keeps every pixel; lower trades detail for size.
+            </template>
           </UiField>
-          <UiField label="CFG scale" for="cfg">
-            <UiNumberInput id="cfg" v-model="cfgScale" :min="0" :max="30" :step="0.5" />
-          </UiField>
-          <UiField label="Sampler" for="sampler">
-            <UiSelect id="sampler" v-model="sampler" :options="SAMPLERS" />
-          </UiField>
-          <UiField label="Scheduler" for="scheduler">
-            <UiSelect id="scheduler" v-model="scheduler" :options="SCHEDULERS" />
-          </UiField>
-        </div>
-        <UiField label="Seed" for="seed">
-          <UiInput id="seed" v-model="seed" placeholder="empty = random" />
-        </UiField>
+        </template>
       </fieldset>
 
-      <fieldset class="space-y-2 border-t border-white/10 pt-4">
+      <fieldset v-if="engine === 'trellis2'" class="space-y-2 border-t border-white/10 pt-4">
         <legend class="text-sm font-medium text-slate-200">How the weights are placed</legend>
-        <UiField v-if="engine === 'trellis2'" label="Transformer" for="transformer">
+        <UiField label="Transformer" for="transformer">
           <UiSelect id="transformer" v-model="transformer" :options="TRANSFORMERS" />
         </UiField>
         <UiField label="VRAM strategy" for="vram-mode">
@@ -712,8 +787,9 @@ async function generate(): Promise<void> {
               into the GLB, which three.js reads as a MeshStandardMaterial with no code of your own.
             </p>
             <p v-else>
-              The mesh is untextured — Hunyuan3D's paint stage is not in ComfyUI. It comes out as clay with
-              smooth normals, ready to be given a material in code. Pick the TRELLIS.2 arm for a textured one.
+              Hunyuan3D 2.1 makes the shape, then its paint model draws albedo and metallic-roughness for six
+              or more views of it, baked into the GLB as a MeshStandardMaterial. The far side is drawn by the
+              model, guided by the photo.
             </p>
           </div>
         </div>
@@ -724,13 +800,13 @@ async function generate(): Promise<void> {
           :hint="
             engine === 'trellis2'
               ? 'BiRefNet masks the object and crops it edge to edge on black, which is what TRELLIS.2 is conditioned on. Off, the image\'s own alpha channel is the mask — for a PNG that is already cut out.'
-              : 'BiRefNet masks the object and centres it on white with a 15% margin, which is what Hunyuan3D was trained on. Turn it off only for an image that is already a clean cut-out.'
+              : 'rembg with BiRefNet masks the object, and Hunyuan3D recentres it with a 15% margin. Off, the image\'s own alpha channel is used — for a PNG that is already cut out.'
           "
         />
 
         <UiField label="Note" for="note">
           <UiInput id="note" v-model="note" placeholder="What this is — kept in the library to find it again" />
-          <template #hint>Not sent to the model: Hunyuan3D is conditioned on the image alone.</template>
+          <template #hint>Not sent to the model: both engines are conditioned on the image alone.</template>
         </UiField>
 
         <UiField label="Batch">
@@ -822,8 +898,9 @@ async function generate(): Promise<void> {
               unwrap and bakes — those last steps are CPU-heavy and take a good share of the time.
             </template>
             <template v-else>
-              A run is the cut-out, the image encode, the shape sampler, then the VAE decode and surface
-              extraction — the decode is the memory peak, and it grows with the octree.
+              A run is the cut-out, the shape sampler and surface extraction, a UV unwrap, then the paint
+              model on six or more views, an upscale, and the bake back onto the UV map. The first run also
+              loads every model, about 16 GB from disk.
             </template>
           </p>
         </div>

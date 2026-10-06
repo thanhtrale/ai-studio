@@ -55,7 +55,11 @@ onBeforeUnmount(() => {
           :alt="item.name"
           class="max-h-[78vh] max-w-full rounded object-contain"
         />
-        <div v-else-if="item.kind === 'model'" class="h-[78vh] w-full">
+        <!--
+          The modal is sized by its content, and a canvas has no size of its
+          own: without a width here the viewer shrinks to its toolbar.
+        -->
+        <div v-else-if="item.kind === 'model'" class="h-[78vh] w-[92vw] max-w-[140vh]">
           <ModelViewer :src="mediaUrl(item.id)" :bytes="item.bytes" />
         </div>
         <!-- Autoplay is deliberate: opening a clip is a request to watch it. -->
