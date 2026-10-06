@@ -7,7 +7,14 @@
  * library's business rather than the browser's.
  */
 
-import type { ImageJobSettings, MediaItem, OutputInfo, VideoJobSettings, VideoMode } from './library';
+import type {
+  ImageJobSettings,
+  MediaItem,
+  ModelJobSettings,
+  OutputInfo,
+  VideoJobSettings,
+  VideoMode,
+} from './library';
 
 export interface GenerateRequest {
   /**
@@ -272,4 +279,50 @@ export interface ImageGenerateResponse {
   /** One entry per file written, in the order the arm produced them. */
   media: MediaItem[];
   report: ArmImageReport;
+}
+
+/**
+ * One photograph in, one or more GLB files out.
+ *
+ * No prompt: Hunyuan3D is conditioned on the image alone. `prompt` in the
+ * library record is a free-text note of what the object is, kept so a mesh can
+ * be found again by what it shows.
+ */
+export interface MeshGenerateRequest {
+  jobId: string;
+  referenceId: string;
+  note?: string;
+  collection?: string;
+  settings: ModelJobSettings;
+  armParams?: Record<string, unknown>;
+}
+
+export interface ArmMeshOut {
+  out_path: string;
+  out_bytes: number;
+  index: number;
+  seed: number;
+  vertices: number | null;
+  faces: number | null;
+  /** Only the TRELLIS.2 arm reports it; Hunyuan3D's meshes never are. */
+  textured?: boolean;
+  /** What the maps weighed before and after WebP; both 0 when left alone. */
+  texture_bytes_before?: number;
+  texture_bytes_after?: number;
+}
+
+export interface ArmMeshReport {
+  seconds_total: number;
+  steps: number;
+  seed: number;
+  batch: number;
+  meshes: ArmMeshOut[];
+  peak_vram_gib: number;
+  vram_scope: 'process' | 'card' | 'unavailable';
+  stages: { name: string; seconds: number }[];
+}
+
+export interface MeshGenerateResponse {
+  media: MediaItem[];
+  report: ArmMeshReport;
 }

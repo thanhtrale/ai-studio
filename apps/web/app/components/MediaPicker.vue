@@ -31,6 +31,7 @@ const failure = ref<string | null>(null);
 const ACCEPT = {
   image: 'image/png,image/jpeg,image/webp',
   video: 'video/mp4,video/webm',
+  model: '.glb,model/gltf-binary',
 } as const;
 
 /** Folders that hold anything of the wanted kind, in the library's own order. */

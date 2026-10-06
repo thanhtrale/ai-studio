@@ -1,0 +1,62 @@
+id: mesh-trellis2-comfy
+name: TRELLIS.2 image-to-textured-mesh (ComfyUI)
+modality: mesh
+protocol: native
+lifecycle: resident
+capabilities:
+  - mesh.generate
+resources:
+  gpu: exclusive
+  # The bf16 transformer alone is 10.3 GB; with DINOv3 and the sparse VAE
+  # decode it is more than the card, and ComfyUI streams what will not fit.
+  vramEstimateMb: 14000
+launch:
+  cwd: .
+  # The image arm's interpreter and ComfyUI checkout, shared rather than
+  # cloned -- the same arrangement as mesh-hunyuan3d-comfy. See README.md.
+  command: ../image-qwen-edit-comfy/.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_trellis2"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--clip-vision"
+    - "{{clipVision}}"
+    - "--shape-vae"
+    - "{{shapeVae}}"
+    - "--texture-vae"
+    - "{{textureVae}}"
+    - "--bg-model"
+    - "{{bgModel}}"
+    - "--weight-dtype"
+    - "{{weightDtype}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+    - "--vram-mode"
+    - "{{vramMode}}"
+    - "--attention"
+    - "{{attention}}"
+    - "--reserve-vram"
+    - "{{reserveVram}}"
+    - "--cache-mode"
+    - "{{cacheMode}}"
+    - "--extra-args"
+    - "{{extraArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ARM_MODALITIES = ['text', 'image', 'video', 'audio'] as const;
+export const ARM_MODALITIES = ['text', 'image', 'video', 'audio', 'mesh'] as const;
 export const ARM_PROTOCOLS = ['native', 'openai', 'comfy', 'cli'] as const;
 export const ARM_LIFECYCLES = ['resident', 'oneshot'] as const;
 export const ARM_GPU_MODES = ['exclusive', 'none'] as const;
@@ -20,7 +20,13 @@ export const ARM_GPU_MODES = ['exclusive', 'none'] as const;
  * because the consoles that want each pick the first arm declaring it, and a
  * small model that reads references is the wrong arm for a long ticket.
  */
-export const ARM_CAPABILITIES = ['image.generate', 'video.generate', 'text.generate', 'text.vision'] as const;
+export const ARM_CAPABILITIES = [
+  'image.generate',
+  'video.generate',
+  'mesh.generate',
+  'text.generate',
+  'text.vision',
+] as const;
 
 export type ArmModality = (typeof ARM_MODALITIES)[number];
 export type ArmProtocol = (typeof ARM_PROTOCOLS)[number];

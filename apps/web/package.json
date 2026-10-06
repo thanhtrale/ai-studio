@@ -18,10 +18,12 @@
     "firebase-admin": "^13.6.0",
     "nuxt": "^4.5.2",
     "pdfjs-dist": "^6.3.289",
+    "three": "^0.186.1",
     "vue": "^3.5.42"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/three": "^0.186.0",
     "@vue/test-utils": "^2.5.0",
     "happy-dom": "^20.14.0",
     "tailwindcss": "^4.3.3",

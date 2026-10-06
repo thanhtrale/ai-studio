@@ -9,7 +9,7 @@
  * with no record still lists -- it just shows only what the filesystem knows.
  */
 
-export type MediaKind = 'image' | 'video';
+export type MediaKind = 'image' | 'video' | 'model';
 
 /** Roots that are scanned. `outputs` is what arms write; `inputs` is what they read. */
 export const MEDIA_ROOTS = ['outputs', 'inputs'] as const;
@@ -23,6 +23,12 @@ export const UPLOAD_ROOT: MediaRoot = 'inputs';
 
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'] as const;
 export const VIDEO_EXTENSIONS = ['.mp4', '.webm'] as const;
+/**
+ * Binary glTF only. A `.gltf` names its buffers and textures as sibling files,
+ * which would make one library entry several files on disk; a GLB is one file,
+ * and it is what both the mesh arm writes and three.js loads fastest.
+ */
+export const MODEL_EXTENSIONS = ['.glb'] as const;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -31,6 +37,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.glb': 'model/gltf-binary',
 };
 
 export interface MediaItem {
@@ -151,6 +158,58 @@ export interface VideoJobSettings extends CommonSettings {
 
 export type VideoMode = 'fl2v' | 'ref2v';
 
+/** Which model made a mesh. The two take different knobs. */
+export type MeshEngine = 'hunyuan3d' | 'trellis2';
+
+/**
+ * A mesh made from one photograph.
+ *
+ * Not a `CommonSettings`: there is no frame. What a mesh has instead is how
+ * finely the surface was extracted and how far it was decimated afterwards,
+ * which together decide whether the file is fit for a web page.
+ *
+ * One shape for both engines, with each one's own knobs optional: they share
+ * the seed, the guidance, the face budget and the cut-out, and a record from
+ * before there was a second engine is a Hunyuan3D one.
+ */
+export interface ModelJobSettings {
+  kind: 'model';
+  /** Absent on records from before TRELLIS.2, which were all Hunyuan3D. */
+  engine?: MeshEngine;
+  /** Every sampler step the job ran; for TRELLIS.2 the sum of its four passes. */
+  steps: number;
+  cfgScale: number;
+  /** Hunyuan3D only: TRELLIS.2's passes each have the template's own. */
+  sampler?: string;
+  scheduler?: string;
+  /** Hunyuan3D: marching resolution of the decoded field, 256 is the blueprint's. */
+  octreeResolution?: number;
+  /** Hunyuan3D: tokens in the shape latent, 4096 is the blueprint's. */
+  latentTokens?: number;
+  /** TRELLIS.2: the four sampling passes, structure to texture. */
+  structureSteps?: number;
+  shapeSteps?: number;
+  refineSteps?: number;
+  textureSteps?: number;
+  /** TRELLIS.2: the voxel resolution the shape is refined at, 1024 or 1536. */
+  shapeResolution?: number;
+  /** TRELLIS.2: edge of the baked texture maps, in pixels. */
+  textureSize?: number;
+  bakeNormals?: boolean;
+  bakeOcclusion?: boolean;
+  /** TRELLIS.2: whether the baked maps were re-encoded as WebP. */
+  compressTextures?: boolean;
+  /** TRELLIS.2: the WebP quality, 1-100; 100 is lossless. */
+  textureQuality?: number;
+  /** Faces to decimate to; 0 kept the raw surface (Hunyuan3D only). */
+  targetFaces: number;
+  /** Whether BiRefNet cut the object out of its photograph first. */
+  removeBackground: boolean;
+  seed: number;
+  batch: number;
+  batchIndex: number;
+}
+
 export interface ImageJobSettings extends CommonSettings {
   kind: 'image';
   steps: number;
@@ -164,26 +223,36 @@ export interface ImageJobSettings extends CommonSettings {
   batchIndex: number;
 }
 
-export type JobSettings = VideoJobSettings | ImageJobSettings;
+export type JobSettings = VideoJobSettings | ImageJobSettings | ModelJobSettings;
 
 export function isImageSettings(settings: JobSettings | undefined): settings is ImageJobSettings {
   return settings?.kind === 'image';
 }
 
 export function isVideoSettings(settings: JobSettings | undefined): settings is VideoJobSettings {
-  return settings !== undefined && settings.kind !== 'image';
+  return settings !== undefined && settings.kind !== 'image' && settings.kind !== 'model';
+}
+
+export function isModelSettings(settings: JobSettings | undefined): settings is ModelJobSettings {
+  return settings?.kind === 'model';
 }
 
 /** What came out, after the upsamplers or the batch changed it. */
 export interface OutputInfo {
-  width: number;
-  height: number;
+  /** Absent for a mesh, which has no frame. */
+  width?: number;
+  height?: number;
   /** Video only. An image has one frame and saying so adds nothing. */
   numFrames?: number;
   fps?: number;
   seconds?: number;
   /** Images only: how many files the job produced. */
   count?: number;
+  /** Meshes only, read back from the GLB the arm wrote. */
+  vertices?: number;
+  faces?: number;
+  /** Meshes only: whether the GLB carries texture images. */
+  textured?: boolean;
 }
 
 export interface ReportSummary {
@@ -209,6 +278,7 @@ export function mediaKind(name: string): MediaKind | null {
   const ext = extensionOf(name);
   if ((IMAGE_EXTENSIONS as readonly string[]).includes(ext)) return 'image';
   if ((VIDEO_EXTENSIONS as readonly string[]).includes(ext)) return 'video';
+  if ((MODEL_EXTENSIONS as readonly string[]).includes(ext)) return 'model';
   return null;
 }
 
@@ -386,6 +456,16 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
+/** `1.2M`, `48K`, `950`: a face count at a glance. */
+export function formatCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}K`;
+  return `${count}`;
+}
+
+/** The modality prefix every arm id starts with, which a chip has no room for. */
+const ARM_PREFIX = /^(video|image|text|audio|mesh)-/;
+
 /**
  * The one line under a thumbnail. Dimensions first: it is what the eye checks.
  *
@@ -396,7 +476,9 @@ export function shortDescription(item: MediaItem, { arm = true } = {}): string {
   const parts: string[] = [];
   const output = item.meta?.output;
 
-  if (output) {
+  if (output?.faces !== undefined) {
+    parts.push(`${formatCount(output.faces)} faces`);
+  } else if (output?.width !== undefined && output.height !== undefined) {
     parts.push(`${output.width}×${output.height}`);
     if (item.kind === 'video' && output.seconds !== undefined && output.fps !== undefined) {
       parts.push(`${output.seconds.toFixed(1)}s`, `${Math.round(output.fps)} fps`);
@@ -404,7 +486,7 @@ export function shortDescription(item: MediaItem, { arm = true } = {}): string {
   }
 
   parts.push(formatBytes(item.bytes));
-  if (arm && item.meta?.armId) parts.push(item.meta.armId.replace(/^(video|image|text|audio)-/, ''));
+  if (arm && item.meta?.armId) parts.push(item.meta.armId.replace(ARM_PREFIX, ''));
   else if (!item.meta) parts.push('untracked');
 
   return parts.join(' · ');
@@ -421,6 +503,8 @@ const ARM_TAGS: Record<string, readonly string[]> = {
   'image-qwen-edit-comfy': ['comfy', 'qwen2511'],
   'image-qwen21-turbo-comfy': ['comfy', 'qwen2.1', 'turbo'],
   'video-ltx25-diffusers': ['diffusers', 'ltx2.5'],
+  'mesh-hunyuan3d-comfy': ['comfy', 'hunyuan3d2.1'],
+  'mesh-trellis2-comfy': ['comfy', 'trellis2'],
 };
 
 /**
@@ -436,13 +520,13 @@ export function mediaTags(item: MediaItem): string[] {
 
   const armId = meta.armId;
   const arm = armId
-    ? (ARM_TAGS[armId] ?? [armId.replace(/^(video|image|text|audio)-/, '')])
+    ? (ARM_TAGS[armId] ?? [armId.replace(ARM_PREFIX, '')])
     : [];
 
   const feature = featureOf(item);
   if (feature === null) return [...arm];
 
-  const modality = feature === 'image.generate' ? 'i' : 'v';
+  const modality = feature === 'image.generate' ? 'i' : feature === 'mesh.generate' ? '3d' : 'v';
   const conditioned = (meta.referenceIds?.length ?? 0) > 0 || meta.referenceId !== undefined;
   return [...arm, `${conditioned ? 'i' : 't'}2${modality}`];
 }
@@ -485,18 +569,21 @@ export function mediaTime(item: MediaItem): number {
 export function featureOf(item: MediaItem): ArmFeature | null {
   const meta = item.meta;
   if (!meta || meta.source !== 'generated') return null;
+  if (isModelSettings(meta.settings)) return 'mesh.generate';
   if (meta.settings) return isImageSettings(meta.settings) ? 'image.generate' : 'video.generate';
   // Generated before settings were recorded, or by a script: the file itself is
   // the only evidence left of which console would have made it.
+  if (item.kind === 'model') return 'mesh.generate';
   return item.kind === 'image' ? 'image.generate' : 'video.generate';
 }
 
 /** The capabilities an arm manifest can declare, as the library sees them. */
-export type ArmFeature = 'image.generate' | 'video.generate';
+export type ArmFeature = 'image.generate' | 'video.generate' | 'mesh.generate';
 
 export const FEATURE_LABELS: Record<ArmFeature, string> = {
   'image.generate': 'Image generation',
   'video.generate': 'Video generation',
+  'mesh.generate': '3D model generation',
 };
 
 /**
@@ -551,7 +638,7 @@ export function filterMedia(items: readonly MediaItem[], filter: MediaFilter): M
   const source = filter.source;
 
   return items.filter((item) => {
-    if (feature === 'image.generate' || feature === 'video.generate') {
+    if (feature === 'image.generate' || feature === 'video.generate' || feature === 'mesh.generate') {
       if (featureOf(item) !== feature) return false;
     }
     if (source !== undefined && source !== null && source !== 'all') {

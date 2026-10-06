@@ -10,6 +10,7 @@ import { computed, onBeforeUnmount, watch } from 'vue';
 
 import { formatBytes, shortDescription, type MediaItem } from '#shared/library';
 
+import ModelViewer from './ModelViewer.vue';
 import UiButton from './ui/Button.vue';
 import UiModal from './ui/Modal.vue';
 
@@ -54,6 +55,9 @@ onBeforeUnmount(() => {
           :alt="item.name"
           class="max-h-[78vh] max-w-full rounded object-contain"
         />
+        <div v-else-if="item.kind === 'model'" class="h-[78vh] w-full">
+          <ModelViewer :src="mediaUrl(item.id)" :bytes="item.bytes" />
+        </div>
         <!-- Autoplay is deliberate: opening a clip is a request to watch it. -->
         <video
           v-else

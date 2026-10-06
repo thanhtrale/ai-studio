@@ -8,9 +8,17 @@
  */
 import { computed, ref, watch } from 'vue';
 
-import { formatBytes, isImageSettings, isVideoSettings, type MediaItem } from '#shared/library';
+import {
+  formatBytes,
+  formatCount,
+  isImageSettings,
+  isModelSettings,
+  isVideoSettings,
+  type MediaItem,
+} from '#shared/library';
 
 import MediaThumb from './MediaThumb.vue';
+import ModelViewer from './ModelViewer.vue';
 import UiBadge from './ui/Badge.vue';
 import UiButton from './ui/Button.vue';
 
@@ -43,9 +51,14 @@ const settings = computed(() => meta.value?.settings);
  */
 const video = computed(() => (isVideoSettings(settings.value) ? settings.value : null));
 const image = computed(() => (isImageSettings(settings.value) ? settings.value : null));
+const model = computed(() => (isModelSettings(settings.value) ? settings.value : null));
+/** The settings that describe a frame -- every kind but a mesh. */
+const framed = computed(() => video.value ?? image.value);
 
 /** Where "use these settings" goes: the console that can actually take them. */
-const consolePath = computed(() => (image.value ? '/generate/image' : '/generate/video'));
+const consolePath = computed(() =>
+  model.value ? '/generate/model' : image.value ? '/generate/image' : '/generate/video',
+);
 
 const when = (iso: string): string =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -57,15 +70,33 @@ const features = computed(() => {
   if (video.value?.spatialUpsample) on.push('spatial ×2');
   if (video.value?.temporalUpsample) on.push('temporal ×2');
   if (image.value && image.value.batch > 1) on.push(`batch ${image.value.batchIndex + 1}/${image.value.batch}`);
+  if (model.value && model.value.batch > 1) on.push(`batch ${model.value.batchIndex + 1}/${model.value.batch}`);
+  if (model.value?.removeBackground) on.push('background removed');
+  if (meta.value?.output?.textured) on.push('textured');
+  if (model.value?.compressTextures) {
+    const quality = model.value.textureQuality ?? 100;
+    on.push(quality >= 100 ? 'WebP lossless' : `WebP ${quality}%`);
+  }
   const references = meta.value?.referenceIds?.length ?? (meta.value?.referenceId ? 1 : 0);
-  if (references > 0) on.push(props.item.kind === 'video' ? 'image-to-video' : `${references} reference`);
+  if (references > 0 && props.item.kind !== 'model') {
+    on.push(props.item.kind === 'video' ? 'image-to-video' : `${references} reference`);
+  }
   return on;
 });
 </script>
 
 <template>
   <div class="flex h-full flex-col">
+    <!-- Orbitable in place: a click on a mesh is a drag more often than a request
+         to open it, so the preview is the button below rather than the panel. -->
     <div
+      v-if="item.kind === 'model'"
+      class="aspect-video w-full shrink-0 overflow-hidden rounded-lg border border-white/10"
+    >
+      <ModelViewer :key="item.id" :src="mediaUrl(item.id)" compact />
+    </div>
+    <div
+      v-else
       class="group relative aspect-video w-full shrink-0 cursor-zoom-in overflow-hidden rounded-lg border border-white/10"
       @click="emit('preview', item)"
     >
@@ -116,6 +147,15 @@ const features = computed(() => {
           <dd class="text-slate-300">
             {{ measured.width }}&#215;{{ measured.height }}
             <span v-if="measured.seconds">&middot; {{ measured.seconds.toFixed(2) }}s</span>
+          </dd>
+        </div>
+        <div v-if="item.meta?.output?.faces" class="flex justify-between gap-3">
+          <dt class="text-slate-500">Geometry</dt>
+          <dd class="text-slate-300">
+            {{ formatCount(item.meta.output.faces) }} faces
+            <span v-if="item.meta.output.vertices">
+              &middot; {{ formatCount(item.meta.output.vertices) }} verts
+            </span>
           </dd>
         </div>
         <div
@@ -174,10 +214,29 @@ const features = computed(() => {
       <section v-if="settings" class="space-y-1">
         <h3 class="text-xs font-medium uppercase tracking-wide text-slate-500">Settings</h3>
         <dl class="space-y-1 text-xs">
-          <div class="flex justify-between gap-3">
+          <div v-if="model?.engine === 'trellis2'" class="flex justify-between gap-3">
+            <dt class="text-slate-500">TRELLIS.2</dt>
+            <dd class="text-right text-slate-300">
+              {{ model.structureSteps }}/{{ model.shapeSteps }}/{{ model.refineSteps }}/{{ model.textureSteps }}
+              step &middot; cfg {{ model.cfgScale }}<br />
+              shape {{ model.shapeResolution }} &middot; {{ model.textureSize }}px maps<br />
+              ≤{{ formatCount(model.targetFaces) }} faces
+              <span v-if="model.bakeNormals">&middot; normals</span>
+              <span v-if="model.bakeOcclusion">&middot; AO</span>
+            </dd>
+          </div>
+          <div v-else-if="model" class="flex justify-between gap-3">
+            <dt class="text-slate-500">Shape</dt>
+            <dd class="text-right text-slate-300">
+              {{ model.steps }} step &middot; cfg {{ model.cfgScale }}<br />
+              octree {{ model.octreeResolution }} &middot; {{ model.latentTokens }} tokens<br />
+              {{ model.targetFaces ? `decimated to ≤${formatCount(model.targetFaces)}` : 'raw surface' }}
+            </dd>
+          </div>
+          <div v-if="framed" class="flex justify-between gap-3">
             <dt class="text-slate-500">Requested</dt>
             <dd class="text-slate-300">
-              {{ settings.width }}&#215;{{ settings.height }}
+              {{ framed.width }}&#215;{{ framed.height }}
               <span v-if="video">&middot; {{ video.numFrames }}f &middot; {{ video.frameRate }} fps</span>
             </dd>
           </div>
@@ -188,11 +247,11 @@ const features = computed(() => {
               {{ image.sampler }} &middot; {{ image.scheduler }} &middot; shift {{ image.flowShift }}
             </dd>
           </div>
-          <div v-if="settings.aspect" class="flex justify-between gap-3">
+          <div v-if="framed?.aspect" class="flex justify-between gap-3">
             <dt class="text-slate-500">Aspect</dt>
             <dd class="text-slate-300">
-              {{ settings.aspect }}
-              <span v-if="settings.megapixels">&middot; {{ settings.megapixels.toFixed(2) }} MP</span>
+              {{ framed.aspect }}
+              <span v-if="framed.megapixels">&middot; {{ framed.megapixels.toFixed(2) }} MP</span>
             </dd>
           </div>
           <div class="flex justify-between gap-3">
@@ -238,7 +297,13 @@ const features = computed(() => {
         <NuxtLink :to="{ path: '/generate/video', query: { reference: item.id } }">
           <UiButton size="sm">Animate this image</UiButton>
         </NuxtLink>
+        <NuxtLink :to="{ path: '/generate/model', query: { reference: item.id } }">
+          <UiButton size="sm">Make a 3D model</UiButton>
+        </NuxtLink>
       </template>
+      <a v-if="item.kind === 'model'" :href="mediaUrl(item.id)" :download="item.name">
+        <UiButton size="sm">Download GLB</UiButton>
+      </a>
     </div>
   </div>
 </template>

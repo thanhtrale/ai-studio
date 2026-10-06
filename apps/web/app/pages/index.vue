@@ -55,6 +55,16 @@ const FUNCTIONS: StudioFunction[] = [
     glyph: '▣',
   },
   {
+    key: 'model',
+    title: '3D model generation',
+    blurb:
+      'Hunyuan3D 2.1 on ComfyUI. One photograph in, a decimated GLB out that three.js loads as is — cut out with BiRefNet first, and previewed in the same renderer a page would use.',
+    modality: 'mesh',
+    capability: 'mesh.generate',
+    to: '/generate/model',
+    glyph: '◆',
+  },
+  {
     key: 'analyze',
     title: 'Requirements analysis',
     blurb:

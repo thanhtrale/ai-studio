@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  contentType,
   facetsOf,
   featureOf,
   filterMedia,
   formatBytes,
+  formatCount,
   formatSeconds,
   generatedMediaId,
   groupLabel,
@@ -502,5 +504,64 @@ describe('stackMedia', () => {
     ]);
 
     expect(entries.map((entry) => entry.kind)).toEqual(['item', 'item']);
+  });
+});
+
+describe('3D models', () => {
+  const mesh: MediaItem = {
+    id: 'outputs/2026-10-06/120000-abcdef12.glb',
+    name: '120000-abcdef12.glb',
+    kind: 'model',
+    group: 'outputs/2026-10-06',
+    bytes: 2_400_000,
+    modifiedAt: '2026-10-06T12:00:00.000Z',
+    meta: {
+      source: 'generated',
+      createdAt: '2026-10-06T12:00:00.000Z',
+      jobId: 'abcdef12-0000',
+      armId: 'mesh-hunyuan3d-comfy',
+      referenceId: 'inputs/chair.png',
+      settings: {
+        kind: 'model',
+        steps: 30,
+        cfgScale: 5,
+        sampler: 'euler',
+        scheduler: 'normal',
+        octreeResolution: 256,
+        latentTokens: 4096,
+        targetFaces: 50_000,
+        removeBackground: true,
+        seed: 1,
+        batch: 1,
+        batchIndex: 0,
+      },
+      output: { count: 1, faces: 49_998, vertices: 25_001 },
+    },
+  };
+
+  it('treats a GLB as a model, and only a binary one', () => {
+    expect(mediaKind('a.glb')).toBe('model');
+    expect(mediaKind('a.gltf')).toBeNull();
+    expect(isMediaId('outputs/2026-10-06/a.glb')).toBe(true);
+    expect(contentType('a.glb')).toBe('model/gltf-binary');
+  });
+
+  it('files a mesh under its own feature, even without settings', () => {
+    expect(featureOf(mesh)).toBe('mesh.generate');
+    const bare: MediaItem = { ...mesh, meta: { source: 'generated', createdAt: mesh.modifiedAt } };
+    expect(featureOf(bare)).toBe('mesh.generate');
+    expect(filterMedia([mesh], { feature: 'mesh.generate' })).toHaveLength(1);
+    expect(filterMedia([mesh], { feature: 'image.generate' })).toHaveLength(0);
+  });
+
+  it('describes a mesh by its faces, not a frame', () => {
+    expect(shortDescription(mesh)).toBe('50K faces · 2.3 MB · hunyuan3d-comfy');
+    expect(mediaTags(mesh)).toEqual(['comfy', 'hunyuan3d2.1', 'i23d']);
+  });
+
+  it('formats counts for a chip', () => {
+    expect(formatCount(950)).toBe('950');
+    expect(formatCount(49_998)).toBe('50K');
+    expect(formatCount(1_250_000)).toBe('1.3M');
   });
 });
