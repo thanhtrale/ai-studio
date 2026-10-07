@@ -181,6 +181,40 @@ export interface VideoEnhanceResponse {
 }
 
 /**
+ * Ask a vision-language arm to rewrite a Qwen-Image 2.1 prompt.
+ *
+ * The image counterpart of `VideoEnhanceRequest`, and its own request for the
+ * same reasons: the rewrite runs on a different arm and comes back into the
+ * prompt box to be read before anything is sampled.
+ */
+export interface ImageEnhanceRequest {
+  jobId: string;
+  /** The prompt as it stands. May be empty when the note and images are enough. */
+  prompt: string;
+  /** What the user wants changed. May be empty: then the rewrite only expands. */
+  comment: string;
+  /** Media ids, in the order the generate request will send them. Any makes it an edit. */
+  referenceIds?: string[];
+  /** The frame, so a text-to-image rewrite is told the ratio it is writing for. */
+  width: number;
+  height: number;
+  /** Which `text.vision` arm to use. The first one discovered when absent. */
+  armId?: string;
+}
+
+export interface ImageEnhanceResponse {
+  prompt: string;
+  armId: string;
+  secondsTotal: number;
+  /**
+   * Text the user put in double quotes that the rewrite does not carry word
+   * for word. Quoted text is what gets painted into the image, and the
+   * rewriter is told to copy it exactly; this is the check that it did.
+   */
+  missingQuotes: string[];
+}
+
+/**
  * The image console's request.
  *
  * Separate from the video one rather than a modality flag on it, because the

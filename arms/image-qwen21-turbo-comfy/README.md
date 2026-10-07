@@ -72,6 +72,11 @@ studio's library already records for the video arm's enhancer.
 A rewrite that comes back malformed is not an error. The job keeps the prompt as
 typed and the timeline says so.
 
+The studio's image console does not use this flag. Its "Enhance prompt" button
+sends the same two files, read from this folder, to the `text.vision` arm
+(`/api/enhance/image`) and puts the rewrite in the prompt box to be read first —
+the same arrangement as the MiniMax-H3 enhancer in the video console.
+
 ## Installing the runtime
 
 `vendor/`, `.venv/` and `custom_nodes/` are git-ignored. From this directory:

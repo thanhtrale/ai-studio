@@ -15,7 +15,13 @@ import { computed, ref, watch } from 'vue';
 
 import type { ArmSummary } from '@ai-studio/arm-contract';
 
-import type { ArmImageReport, ImageGenerateRequest, ImageGenerateResponse } from '#shared/generate';
+import type {
+  ArmImageReport,
+  ImageEnhanceRequest,
+  ImageEnhanceResponse,
+  ImageGenerateRequest,
+  ImageGenerateResponse,
+} from '#shared/generate';
 import { mergePrompt } from '#shared/generate';
 import { ratioLabel } from '#shared/image-size';
 import {
@@ -41,6 +47,7 @@ import JobTimeline from './JobTimeline.vue';
 import MediaLightbox from './MediaLightbox.vue';
 import MediaPicker from './MediaPicker.vue';
 import MediaThumb from './MediaThumb.vue';
+import PromptDiff from './PromptDiff.vue';
 import VramChart from './VramChart.vue';
 import UiAlert from './ui/Alert.vue';
 import UiBadge from './ui/Badge.vue';
@@ -153,45 +160,6 @@ const VRAM_MODES = [
   { value: 'novram', label: 'novram — when lowvram is not enough' },
 ];
 
-/**
- * Styles worth keeping, as the pair of prompts that produce them.
- *
- * Only the look: no subject, no pose, no framing. A preset that described a
- * character would fight whatever is typed in the box below it, and the whole
- * point of the split is that the style survives a change of subject.
- */
-const STYLE_PRESETS: { name: string; style: string; negative: string }[] = [
-  {
-    name: '3D xianxia',
-    style: [
-      'semi-realistic 3D rendered xianxia illustration',
-      'cinematic character render, Chinese fantasy wuxia aesthetic',
-      'stylised anime proportions with physically based skin shading and subsurface scattering',
-      'strand-level hair detail with soft backlit rim light',
-      'porcelain pale complexion, delicate features',
-      'desaturated palette of ash grey and charcoal with deep crimson accents',
-      'low-key volumetric lighting, cool overcast key light, warm rim light',
-      'shallow depth of field, creamy bokeh',
-      'drifting snow and dust motes in the air',
-      'fine film grain, subtle chromatic aberration',
-      'detailed silk, embroidery and blackened metal materials',
-      'Unreal Engine 5 and Octane cinematic render, 8k, highly detailed',
-    ].join(', '),
-    negative: [
-      'photograph, real person, photorealistic skin pores',
-      'flat 2D cel shading, lineart, manga screentone, sketch, oil painting texture',
-      'western cartoon, chibi, low detail',
-      'blurry, out of focus, jpeg artifacts, lowres',
-      'oversaturated, neon colours, flat frontal lighting, blown highlights',
-      'plastic skin, waxy skin, doll-like, dead eyes, asymmetric eyes',
-      'bad anatomy, bad proportions, deformed hands, extra fingers, fused fingers, extra limbs',
-      'mutated, disfigured',
-      'watermark, signature, text, logo, username, border, frame, cropped',
-      'modern clothing',
-    ].join(', '),
-  },
-];
-
 // By capability, not modality. Two image arms can be unable to run each
 // other's jobs, and this console once offered a scaffold that had only a
 // health endpoint -- an entry whose every job would have failed.
@@ -268,10 +236,15 @@ const textEncoderOnCpu = ref(false);
 const vramMode = ref('dynamic');
 
 const prompt = ref('');
-// The style half. Kept apart from the subject only because the two change at
-// different rates; they are joined into one prompt before anything is sent,
-// and leaving this empty is how you write the whole prompt in one box.
-const stylePrompt = ref('');
+// The enhancer's brief: what to change, in the user's own words. Never sent to
+// the image model -- only the rewrite it produces is.
+const enhanceNote = ref('');
+/** The prompt as it was before the last rewrite, so one click puts it back. */
+const promptBeforeEnhance = ref<string | null>(null);
+/** Open after every rewrite: what changed is the first thing worth reading. */
+const showEnhanceDiff = ref(true);
+/** Said after a rewrite that did not keep quoted text word for word. */
+const enhanceWarning = ref<string | null>(null);
 const negativePrompt = ref('');
 const aspect = ref<string>('1:1');
 const width = ref(1024);
@@ -286,8 +259,6 @@ const scheduler = ref('beta');
 const flowShift = ref(3);
 const seed = ref('');
 const batch = ref(1);
-/** Ask the arm to rewrite the prompt first. Only the turbo arm has a rewriter. */
-const enhancePrompt = ref(false);
 
 const referenceIds = ref<(string | null)[]>([null]);
 /** Which reference slot the picker is filling, or null when it is closed. */
@@ -431,8 +402,12 @@ function removeReference(index: number): void {
 
 /** Puts a previous run back into the form, exactly as it was asked for. */
 function restoreFrom(meta: MediaMeta): void {
-  prompt.value = meta.prompt ?? '';
-  stylePrompt.value = meta.stylePrompt ?? '';
+  // A record from when the console had a separate style box keeps the halves;
+  // they go back as the one prompt they were sent as.
+  prompt.value = mergePrompt(meta.prompt ?? '', meta.stylePrompt);
+  enhanceNote.value = '';
+  promptBeforeEnhance.value = null;
+  enhanceWarning.value = null;
   negativePrompt.value = meta.negativePrompt ?? '';
 
   const ids = meta.referenceIds ?? (meta.referenceId ? [meta.referenceId] : []);
@@ -494,7 +469,7 @@ watch(
   { immediate: true },
 );
 
-const status = ref<'idle' | 'generating'>('idle');
+const status = ref<'idle' | 'generating' | 'enhancing'>('idle');
 const failure = ref<string | null>(null);
 const results = ref<MediaItem[]>([]);
 const report = ref<ArmImageReport | null>(null);
@@ -503,16 +478,64 @@ const preview = ref<MediaItem | null>(null);
 const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: follow, stopWatching } =
   useJobTelemetry();
 
-/** What the model will be given: the two boxes as one prompt. */
-const mergedPrompt = computed(() => mergePrompt(prompt.value, stylePrompt.value));
-
 const canGenerate = computed(
-  () => mergedPrompt.value.length > 0 && status.value === 'idle' && arm.value !== null,
+  () => prompt.value.trim().length > 0 && status.value === 'idle' && arm.value !== null,
 );
 
-function applyPreset(preset: (typeof STYLE_PRESETS)[number]): void {
-  stylePrompt.value = preset.style;
-  negativePrompt.value = preset.negative;
+/** Something to rewrite from: a draft, a note, or an image to describe. */
+const canEnhance = computed(
+  () =>
+    isTurbo.value &&
+    status.value === 'idle' &&
+    (prompt.value.trim().length > 0 || enhanceNote.value.trim().length > 0 || chosenIds.value.length > 0),
+);
+
+/**
+ * Rewrite the prompt on the vision-language arm, from the note and the references.
+ *
+ * The same arrangement as the video console's: the answer replaces the prompt
+ * box rather than going straight to the sampler, the note stays so a second
+ * attempt is one click, and the old prompt is kept for one undo.
+ */
+async function enhance(): Promise<void> {
+  if (!canEnhance.value) return;
+
+  status.value = 'enhancing';
+  failure.value = null;
+  enhanceWarning.value = null;
+  const jobId = crypto.randomUUID();
+  follow(jobId);
+
+  try {
+    const body: ImageEnhanceRequest = {
+      jobId,
+      prompt: prompt.value,
+      comment: enhanceNote.value,
+      ...(chosenIds.value.length > 0 ? { referenceIds: chosenIds.value } : {}),
+      width: snapped.value.width,
+      height: snapped.value.height,
+    };
+    const answer = await $fetch<ImageEnhanceResponse>('/api/enhance/image', { method: 'POST', body });
+    promptBeforeEnhance.value = prompt.value;
+    prompt.value = answer.prompt;
+    showEnhanceDiff.value = true;
+    enhanceWarning.value =
+      answer.missingQuotes.length > 0
+        ? `Text not kept word for word: ${answer.missingQuotes.map((line) => `"${line}"`).join(', ')}. ` +
+          'Put it back exactly as written, or enhance again.'
+        : null;
+  } catch (error) {
+    failure.value = describeFetchError(error);
+  } finally {
+    status.value = 'idle';
+  }
+}
+
+function undoEnhance(): void {
+  if (promptBeforeEnhance.value === null) return;
+  prompt.value = promptBeforeEnhance.value;
+  promptBeforeEnhance.value = null;
+  enhanceWarning.value = null;
 }
 
 async function generate(): Promise<void> {
@@ -520,6 +543,7 @@ async function generate(): Promise<void> {
 
   status.value = 'generating';
   failure.value = null;
+  enhanceWarning.value = null;
   results.value = [];
   report.value = null;
 
@@ -550,9 +574,7 @@ async function generate(): Promise<void> {
     prompt: prompt.value.trim(),
     settings,
     output: { width: snapped.value.width, height: snapped.value.height, count: batch.value },
-    ...(stylePrompt.value.trim() ? { stylePrompt: stylePrompt.value.trim() } : {}),
     ...(negativePrompt.value.trim() ? { negativePrompt: negativePrompt.value.trim() } : {}),
-    ...(enhancePrompt.value ? { enhancePrompt: true } : {}),
     ...(chosenIds.value.length > 0 ? { referenceIds: chosenIds.value } : {}),
     armParams: {
       weightDtype: weightDtype.value,
@@ -686,7 +708,7 @@ async function generate(): Promise<void> {
           label="Keep the text encoder on the CPU"
           :hint="
             isTurbo
-              ? 'Qwen3-VL is most of the card it would otherwise share with the transformer. On the CPU it also makes the prompt enhancer far slower, because the enhancer is that same model generating text.'
+              ? 'Qwen3-VL is most of the card it would otherwise share with the transformer. On the CPU the prompt encode is slower, and on a 16 GiB card it is what stops the two of them fighting.'
               : 'Qwen2.5-VL is fifteen gigabytes of the card it would otherwise share with the transformer. On the CPU the prompt encode is slower, and on a 16 GiB card it is what stops the two of them fighting.'
           "
         />
@@ -744,43 +766,50 @@ async function generate(): Promise<void> {
           </template>
         </UiField>
 
-        <UiField label="Style" for="style">
+        <UiField v-if="isTurbo" label="Note for the enhancer" for="enhance-note">
           <UiTextarea
-            id="style"
-            v-model="stylePrompt"
+            id="enhance-note"
+            v-model="enhanceNote"
             :rows="3"
-            placeholder="How it should look — medium, lighting, palette, render"
+            placeholder="What to change or add — e.g. golden hour, a sign that reads “OPEN”, shoot it from low down"
           />
-          <div v-if="STYLE_PRESETS.length" class="mt-2 flex flex-wrap items-center gap-2">
-            <span class="text-xs text-slate-500">Presets:</span>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <UiButton :disabled="!canEnhance" data-testid="enhance" @click="enhance">
+              {{ status === 'enhancing' ? 'Enhancing…' : 'Enhance prompt' }}
+            </UiButton>
+            <UiButton v-if="promptBeforeEnhance !== null && status === 'idle'" size="sm" @click="undoEnhance">
+              Undo enhance
+            </UiButton>
             <UiButton
-              v-for="preset in STYLE_PRESETS"
-              :key="preset.name"
+              v-if="promptBeforeEnhance !== null"
               size="sm"
-              :data-testid="`style-preset-${preset.name}`"
-              @click="applyPreset(preset)"
+              :active="showEnhanceDiff"
+              data-testid="toggle-diff"
+              @click="showEnhanceDiff = !showEnhanceDiff"
             >
-              {{ preset.name }}
+              {{ showEnhanceDiff ? 'Hide changes' : 'Show changes' }}
             </UiButton>
           </div>
+          <!-- Against the box as it is now, not the rewrite as it arrived: an
+               edit made after the enhance is part of what will be sent. -->
+          <PromptDiff
+            v-if="promptBeforeEnhance !== null && showEnhanceDiff"
+            class="mt-3"
+            :before="promptBeforeEnhance"
+            :after="prompt"
+          />
           <template #hint>
-            Split from the prompt for editing only — the two are joined with a comma and sent as one, so
-            writing everything above and leaving this empty gives exactly the same result. A preset also
-            fills the negative prompt.
+            Qwen3-VL reads {{ chosenIds.length > 0 ? 'the references, ' : '' }}this note and the prompt above,
+            and rewrites the prompt with Qwen-Image 2.1's own rewriter instructions —
+            <template v-if="chosenIds.length > 0">a precise edit directive for the references</template>
+            <template v-else>one long paragraph describing the finished image, for this frame's ratio</template>.
+            Text in double quotes is what gets drawn into the image and is kept word for word. The result
+            replaces the prompt for you to read before generating. It runs on its own arm, so the card is
+            swapped twice: the first image after an enhance reloads Qwen-Image.
           </template>
         </UiField>
 
-        <details v-if="stylePrompt.trim() && prompt.trim()" class="text-xs text-slate-500">
-          <summary class="cursor-pointer hover:text-slate-300">What the model will be given</summary>
-          <p class="mt-2 rounded-lg bg-black/30 p-3 font-mono leading-relaxed">{{ mergedPrompt }}</p>
-        </details>
-
-        <UiCheckbox
-          v-if="isTurbo"
-          v-model="enhancePrompt"
-          label="Rewrite the prompt first"
-          hint="Runs Qwen3-VL — the text encoder this arm already has loaded — over the prompt with the model's own rewriter instructions, then samples what it wrote. Once per job, not once per image. The library records both what you typed and what reached the model."
-        />
+        <UiAlert v-if="enhanceWarning" tone="warn">{{ enhanceWarning }}</UiAlert>
 
         <UiField label="Batch">
           <div class="flex flex-wrap items-center gap-2">

@@ -21,6 +21,15 @@ const storageDir = path.resolve(
   process.env['AISTUDIO_STORAGE_DIR'] ?? './storage',
 );
 
+// The same arms directory the supervisor discovers manifests in. The image
+// enhancer reads its rewriter instructions from the Qwen-Image 2.1 arm there,
+// so the arm and the console share one copy of them.
+const armsDir = path.resolve(
+  fileURLToPath(import.meta.url),
+  '../../..',
+  process.env['AISTUDIO_ARMS_DIR']?.trim() || './arms',
+);
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-09',
   devtools: { enabled: false },
@@ -44,6 +53,7 @@ export default defineNuxtConfig({
     supervisorUrl: `http://${supervisorHost}:${supervisorPort}`,
     supervisorToken: process.env['AISTUDIO_SUPERVISOR_TOKEN'] ?? '',
     storageDir,
+    armsDir,
     // A Figma personal access token, used only to render frames. With it, a
     // survey gets its pictures from Figma's own image endpoint thirty nodes at
     // a time and does not need the desktop app to have the file open; without
