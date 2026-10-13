@@ -95,15 +95,59 @@ Measured as edges stretched past twice their rest length over a clip, on the
 TRELLIS.2 character above: wave 198 → 13 (longest 13x → 2.4x), run 867 → 232
 (18x → 4.4x).
 
+Three more corrections (`frame.py`, `weights.prune_far`), because a character
+already standing in a T-pose came back twisted at the waist with its fists
+wrenched over:
+
+- **Upright hips frame.** MIA reads the body in a frame built from three
+  coarse joints a few centimetres apart; slightly off, they rolled a straight
+  TRELLIS.2 character 13°. Hips is never posed, so the pose network bent the
+  spine and thighs to make up for it. Every mesh here is y-up, so only the
+  heading is taken from the joints.
+- **No twist in the T-pose.** Most of what the pose network says about limbs
+  is turn about the bone (an upper arm 51°, of which 17° moves it), which a
+  fused, image-made mesh gives no evidence of and which wrings the limbs once
+  it is the rest. Each bone keeps its swing; with fingers folded, the hand is
+  not posed at all -- a fist read as a hand turned over 173°.
+- **No weight across the body.** A bone more than 12% of the character's
+  height further from a vertex than its nearest bone holds none of it: a fist
+  had a fifth of itself on Head.
+
+Same character, six clips, edges past 2x *and* over 1 cm longer: 8,884 →
+2,732 (worst 41x → 12x). A Hunyuan3D mesh of the same image: 814 → 749.
+
 Blender runs in a process per job: `bpy` holds global state, wants the main
 thread, and on this build faults at interpreter exit (0xC0000005) after the
 file is written, so `blend.py` leaves with `os._exit` once it has printed its
 result.
 
+## Review before binding
+
+A job's `mode` splits the rig in two, so a person can check it first
+(`rigdata.py`, and the studio's rig editor):
+
+- `draft` runs the networks and stops. It writes `outputDir/.rig-drafts/<id>/`
+  -- `mesh.glb` (the mesh in the rig's frame, same vertex order), `rig.json`
+  (bones: name, parent, head, tail), `weights.bin` (four influences per
+  vertex: float32 weights, then uint8 bone indices) and `rig.npz`. The
+  library skips dot folders, so a draft is never listed as a result.
+- `bind` binds a draft. Moved bones arrive in the job's `bones`
+  (`{name: {head, tail}}`); repainted weights in the draft's
+  `weights.edited.bin`, same layout as `weights.bin`. A moved bone is posed to
+  the T-pose from where it now points: the T-pose direction of every bone is
+  kept with the draft, and its swing is rebuilt.
+- `rig` (the default) is both in one go.
+
+What a draft holds is what Blender binds: fingers are folded and hands made
+rigid before it is written (`rigdata.finalise`), not afterwards.
+
 | Field | Default | |
 | --- | --- | --- |
-| `meshPath` | — | a GLB under `inputDir` |
-| `outPath` | — | `.glb` under `outputDir` |
+| `mode` | `rig` | `rig`, `draft` or `bind` |
+| `meshPath` | — | a GLB under `inputDir`; not for `bind` |
+| `outPath` | — | `.glb` under `outputDir`; not for `draft` |
+| `draftDir` | — | `.rig-drafts/<id>`, for `draft` and `bind` |
+| `bones` | — | moved bones, for `bind` |
 | `clips` | [] | built-in names and Mixamo file names, up to 16 |
 | `removeFingers` | true | fold the 30 finger bones into the hands: 22 bones left |
 | `inPlace` | true | locomotion stays on the spot |

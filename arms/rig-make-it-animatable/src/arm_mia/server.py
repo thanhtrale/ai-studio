@@ -82,10 +82,8 @@ class ArmState:
         finally:
             gc.collect()
             self._gpu.release()
-        print(
-            f"[{ARM_ID}] rigged {job.mesh_path.name} in {report.seconds_total:.1f}s: {report.clips}",
-            flush=True,
-        )
+        what = f"drafted {report.draft}" if job.mode == "draft" else f"rigged ({job.mode}): {report.clips}"
+        print(f"[{ARM_ID}] {what} in {report.seconds_total:.1f}s", flush=True)
         return asdict(report)
 
     def shutdown(self) -> None:

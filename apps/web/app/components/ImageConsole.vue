@@ -485,7 +485,6 @@ const canGenerate = computed(
 /** Something to rewrite from: a draft, a note, or an image to describe. */
 const canEnhance = computed(
   () =>
-    isTurbo.value &&
     status.value === 'idle' &&
     (prompt.value.trim().length > 0 || enhanceNote.value.trim().length > 0 || chosenIds.value.length > 0),
 );
@@ -766,7 +765,7 @@ async function generate(): Promise<void> {
           </template>
         </UiField>
 
-        <UiField v-if="isTurbo" label="Note for the enhancer" for="enhance-note">
+        <UiField label="Note for the enhancer" for="enhance-note">
           <UiTextarea
             id="enhance-note"
             v-model="enhanceNote"

@@ -33,6 +33,10 @@ SMOOTH_STEP = 0.5
 HAND_RAMP = 0.3
 #: The share of a vertex an arm's chain must hold for it to count as that arm's.
 ARM_CHAIN = 0.8
+#: How much further than its nearest bone, as a share of the character's
+#: height, a bone may be and still hold weight on a vertex: about 22 cm on a
+#: 1.8 m character. Further is the network spilling weight across the body.
+FAR = 0.12
 
 
 def _normalised(weights: np.ndarray) -> np.ndarray:
@@ -85,6 +89,40 @@ def clean(bw: np.ndarray, vertices: np.ndarray, faces: np.ndarray, smooth: int =
         around = mean_of @ weights
         weights[connected] += SMOOTH_STEP * (around[connected] - weights[connected])
     return _normalised(weights)[groups].astype(np.asarray(bw).dtype)
+
+
+def bone_distances(vertices: np.ndarray, heads: np.ndarray, tails: np.ndarray) -> np.ndarray:
+    """(vertices x bones): each vertex's distance to each bone, as a segment head to tail."""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    out = np.empty((len(vertices), len(heads)))
+    heads, tails = np.asarray(heads, np.float64), np.asarray(tails, np.float64)
+    for index, (head, tail) in enumerate(zip(heads, tails, strict=True)):
+        along = tail - head
+        length2 = float(along @ along)
+        t = np.zeros(len(vertices)) if length2 == 0 else (vertices - head) @ along / length2
+        t = np.clip(t, 0.0, 1.0)
+        out[:, index] = np.linalg.norm(vertices - (head + t[:, None] * along), axis=1)
+    return out
+
+
+def prune_far(bw: np.ndarray, vertices: np.ndarray, heads: np.ndarray, tails: np.ndarray) -> np.ndarray:
+    """`bw` with the weight a vertex puts on bones nowhere near it taken away.
+
+    The network now and then spills weight across the body -- a fist holding a
+    fifth of itself on Head and a little on a thigh -- and such a vertex goes
+    wherever the far bone goes. A bone counts as far when it is `FAR` of the
+    character's height further from the vertex than the vertex's nearest bone.
+    A vertex whose every weight is far keeps them all: there is nothing better.
+    """
+    weights = np.asarray(bw, dtype=np.float64)
+    vertices = np.asarray(vertices, dtype=np.float64)
+    height = float(np.ptp(vertices[:, 1])) or 1.0
+    distance = bone_distances(vertices, heads, tails)
+    near = distance <= distance.min(axis=1, keepdims=True) + FAR * height
+    kept = np.where(near, weights, 0.0)
+    empty = kept.sum(axis=1) <= 0
+    kept[empty] = weights[empty]
+    return _normalised(kept).astype(np.asarray(bw).dtype)
 
 
 def rigid_hands(

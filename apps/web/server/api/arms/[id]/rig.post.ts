@@ -1,44 +1,17 @@
-import { copyFile, stat } from 'node:fs/promises';
-
 import type { RigGenerateRequest, RigGenerateResponse } from '#shared/generate';
-import { generatedMediaId, isMediaId, mediaKind, rootOf, sanitiseCollection, UPLOAD_ROOT } from '#shared/library';
+import { generatedMediaId, sanitiseCollection, UPLOAD_ROOT } from '#shared/library';
 
 import { mediaIdFromPath } from '../../../utils/jobs';
-import { describeMedia, ensureDirectoryFor, mediaPath, writeMeta } from '../../../utils/library';
+import { describeMedia, writeMeta } from '../../../utils/library';
 import { relay } from '../../../utils/relay';
+import { checkBoneEdits, DRAFTS_DIR, isDraftId, readDraftInfo, stageMesh } from '../../../utils/rig';
 import { RelayError } from '../../../utils/supervisor';
 
-/** Where a generated file is copied to so an arm may read it -- the mesh route's folder. */
-const STAGED_DIR = 'from-outputs';
 const MAX_CLIPS = 16;
 const CLIP_NAME = /^[A-Za-z0-9 _.()-]{1,80}$/;
 
 function invalid(message: string): never {
   throw createError({ statusCode: 400, statusMessage: 'invalid_request', data: { message } });
-}
-
-/**
- * The mesh as an id under `inputs/`, copied there if it was generated.
- *
- * The usual input is a mesh this studio just made, and arms may only read
- * `inputs/` -- the same staging the mesh route does for photographs.
- */
-async function stageMesh(storageDir: string, id: unknown): Promise<string> {
-  if (!isMediaId(id) || mediaKind(id) !== 'model') {
-    throw new RelayError('invalid_request', 'the mesh must be a .glb in the library');
-  }
-  if (rootOf(id) === UPLOAD_ROOT) return id;
-
-  const staged = `${UPLOAD_ROOT}/${STAGED_DIR}/${id.slice(id.indexOf('/') + 1)}`;
-  if (!isMediaId(staged)) throw new RelayError('invalid_request', `${id} is nested too deeply to stage`);
-  const target = mediaPath(storageDir, staged);
-  try {
-    await stat(target);
-  } catch {
-    await ensureDirectoryFor(target);
-    await copyFile(mediaPath(storageDir, id), target);
-  }
-  return staged;
 }
 
 export default defineEventHandler(async (event): Promise<RigGenerateResponse> => {
@@ -63,13 +36,20 @@ export default defineEventHandler(async (event): Promise<RigGenerateResponse> =>
     invalid('every clip must be a plain clip name');
   }
 
+  const draftId = body.draftId;
+  if (draftId !== undefined && !isDraftId(draftId)) invalid('draftId is not a draft id');
+  if (body.bones !== undefined && draftId === undefined) invalid('bones are edits to a draft: send draftId with them');
+
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   const startedAt = new Date();
   const collection = sanitiseCollection(body.collection) ?? undefined;
   const plannedId = generatedMediaId(jobId, startedAt, '.glb', collection);
 
   return relay(async () => {
-    const meshId = await stageMesh(config.storageDir, body.meshId);
+    // A reviewed draft carries its own mesh; only a fresh rig reads the library's.
+    const draft = draftId ? await readDraftInfo(config.storageDir, draftId) : null;
+    const bones = draft ? checkBoneEdits(body.bones, draft) : {};
+    const meshId = draft ? null : await stageMesh(config.storageDir, body.meshId);
     const client = supervisorClient(event);
 
     const { arms } = await client.inventory();
@@ -84,7 +64,9 @@ export default defineEventHandler(async (event): Promise<RigGenerateResponse> =>
       params: {},
       job: {
         outPath: plannedId.slice('outputs/'.length),
-        meshPath: meshId.slice(`${UPLOAD_ROOT}/`.length),
+        ...(meshId === null
+          ? { mode: 'bind', draftDir: `${DRAFTS_DIR}/${draftId}`, bones }
+          : { mode: 'rig', meshPath: meshId.slice(`${UPLOAD_ROOT}/`.length) }),
         clips: settings.clips,
         removeFingers: settings.removeFingers,
         inPlace: settings.inPlace,

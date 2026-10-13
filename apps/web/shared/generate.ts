@@ -370,6 +370,49 @@ export interface RigGenerateRequest {
   note?: string;
   collection?: string;
   settings: RigJobSettings;
+  /**
+   * A reviewed draft to bind instead of predicting afresh. Its weights are
+   * the edited ones when the editor saved any (`PUT .../weights`).
+   */
+  draftId?: string;
+  /** Bones moved in the editor, by name. Only with `draftId`. */
+  bones?: RigBoneEdits;
+}
+
+export type Vec3 = [number, number, number];
+
+/** A bone's rest head and tail, in the draft's frame: y-up, hips at the origin, about two units tall. */
+export interface RigBoneEdit {
+  head: Vec3;
+  tail: Vec3;
+}
+
+export type RigBoneEdits = Record<string, RigBoneEdit>;
+
+/** Detect the skeleton and weights, and stop there so they can be reviewed. */
+export interface RigDraftRequest {
+  jobId: string;
+  meshId: string;
+  removeFingers: boolean;
+}
+
+export interface RigDraftResponse {
+  draftId: string;
+  bones: number;
+  vertices: number;
+  faces: number;
+  secondsTotal: number;
+}
+
+/** A draft's `rig.json`, as the arm writes it. */
+export interface RigDraftInfo {
+  version: 1;
+  vertexCount: number;
+  faceCount: number;
+  /** Influences per vertex in `weights.bin`; always four. */
+  influences: number;
+  removeFingers: boolean;
+  bones: { name: string; parent: number; head: Vec3; tail: Vec3 }[];
 }
 
 export interface ArmRigReport {

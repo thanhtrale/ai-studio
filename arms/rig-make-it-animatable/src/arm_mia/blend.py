@@ -5,6 +5,7 @@ character to a T-pose; turning that into a file is Blender's job, through the
 `bpy` module. This is `app_blender.main` from the vendored checkout, with four
 changes:
 
+- the rig arrives finalised (`rigdata.finalise`): fingers folded, hands rigid
 - temporary files are closed before anything reopens them, which Windows
   requires and `NamedTemporaryFile` does not do
 - the rest pose is always reset to the predicted T-pose, because every clip
@@ -30,34 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import vendor, weights
-
-
-def is_finger(bone_name: str) -> bool:
-    return any(f in bone_name for f in ("Thumb", "Index", "Middle", "Ring", "Pinky"))
-
-
-def remove_fingers(data: dict) -> dict:
-    """Fold every finger into its hand: a generated mesh's fingers are fused anyway."""
-    names = [None] * len(data["bones_idx_dict"])
-    for name, index in data["bones_idx_dict"].items():
-        names[index] = name
-    keep = [i for i, name in enumerate(names) if not is_finger(name)]
-
-    bw = data["bw"].copy()
-    for i, name in enumerate(names):
-        if is_finger(name):
-            hand = "Left" if "Left" in name else "Right"
-            bw[:, data["bones_idx_dict"][f"mixamorig:{hand}Hand"]] += bw[:, i]
-
-    out = dict(data)
-    out["joints"] = data["joints"][keep]
-    out["joints_tail"] = data["joints_tail"][keep]
-    out["bw"] = bw[:, keep]
-    if data.get("pose") is not None:
-        out["pose"] = data["pose"][keep]
-    out["bones_idx_dict"] = {names[i]: j for j, i in enumerate(keep)}
-    return out
+from . import rigdata, vendor
 
 
 def add_clip(blender_utils, bpy, armature_obj, mesh_obj, clip: Path, inplace: bool) -> str:
@@ -108,14 +82,10 @@ def main(job_path: str, out_path: str, template: str, clips: list[str]) -> dict:
     import util.blender_utils as blender_utils
     from util.blender_utils import bpy
 
-    raw = np.load(job_path, allow_pickle=True)
-    data = {key: raw[key] for key in raw.files}
-    mesh: trimesh.Trimesh = data["mesh"].item().copy()
-    data["bones_idx_dict"] = data["bones_idx_dict"].item()
-    data["pose"] = None if data["pose"].dtype == object and data["pose"].item() is None else data["pose"]
-    options = json.loads(str(data["options"]))
-    if options.get("remove_fingers"):
-        data = remove_fingers(data)
+    # Finalised already when it came from a draft: what was reviewed is what is bound.
+    data = rigdata.finalise(rigdata.load(Path(job_path)))
+    mesh: trimesh.Trimesh = data["mesh"].copy()
+    options = rigdata.options_of(data)
     joints, joints_tail, bw, pose = data["joints"], data["joints_tail"], data["bw"], data["pose"]
     bones_idx_dict = data["bones_idx_dict"]
     pose_ignore = list(options.get("pose_ignore", []))
@@ -134,8 +104,7 @@ def main(job_path: str, out_path: str, template: str, clips: list[str]) -> dict:
     armature_obj.matrix_world.identity()
     blender_utils.update()
 
-    # The frame the joints are in; the copy Blender imports is turned Z-up.
-    rest_verts = np.asarray(mesh.vertices).copy()
+    # The copy Blender imports is turned Z-up.
     with tempfile.TemporaryDirectory() as scratch:
         mesh_file = os.path.join(scratch, "mesh.glb")
         verts = np.asarray(mesh.vertices).copy()
@@ -152,7 +121,6 @@ def main(job_path: str, out_path: str, template: str, clips: list[str]) -> dict:
 
     blender_utils.set_rest_bones(armature_obj, joints / scaling, joints_tail / scaling, bones_idx_dict)
     blender_utils.set_armature_parent([mesh_obj], armature_obj)
-    bw = weights.rigid_hands(bw, rest_verts, joints, bones_idx_dict)
     blender_utils.set_weights([mesh_obj], bw, bones_idx_dict)
     armature_obj.matrix_world = matrix_world
     blender_utils.remove_empty()

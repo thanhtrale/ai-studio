@@ -3,11 +3,12 @@ name = "arm-qwen3vl"
 version = "0.1.0"
 description = "ai-studio vision-language arm hosting Qwen3-VL 8B via llama-server"
 requires-python = ">=3.12"
-# Nothing. The model runs in a child process written in C++, and everything
-# this arm does -- HTTP in both directions, a server-sent event stream, process supervision -- is
-# in the standard library. The venv exists so the launch command names a known
-# interpreter, not because anything needs installing into it.
-dependencies = []
+# Only Pillow. The model runs in a child process written in C++, and everything
+# else this arm does -- HTTP in both directions, a server-sent event stream,
+# process supervision -- is in the standard library. Pillow is here because the
+# child decodes images with stb_image, which cannot read WebP, and the studio's
+# library is full of it: such a still is re-encoded as PNG before it is sent.
+dependencies = ["pillow>=11"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

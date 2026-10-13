@@ -16,6 +16,7 @@ knowing where the studio keeps its files.
 from __future__ import annotations
 
 import base64
+import io
 import re
 import time
 from dataclasses import dataclass, field
@@ -196,9 +197,39 @@ def _images(body: dict[str, Any], in_dir: Path) -> list[Path]:
     return found
 
 
+def _is_webp(data: bytes) -> bool:
+    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
+def _as_png(data: bytes) -> bytes:
+    """WebP re-encoded as PNG, keeping alpha. Imported here so a job without one never loads Pillow."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        converted = image if image.mode in {"RGB", "RGBA", "L", "LA"} else image.convert("RGBA")
+        out = io.BytesIO()
+        converted.save(out, format="PNG")
+        return out.getvalue()
+
+
 def _data_url(path: Path) -> str:
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{IMAGE_TYPES[path.suffix.lower()]};base64,{encoded}"
+    """The still as the child can decode it.
+
+    llama-server reads images with stb_image, which has no WebP decoder and
+    answers such a file with a bare 400. Sniffed from the bytes rather than the
+    suffix, because the bytes are what the child decodes.
+    """
+    data = path.read_bytes()
+    mime = IMAGE_TYPES[path.suffix.lower()]
+    if _is_webp(data):
+        try:
+            data = _as_png(data)
+        except Exception as error:  # Pillow raises several unrelated types for a bad file
+            raise JobError(f"{path.name} is WebP and could not be converted: {error}") from error
+        mime = "image/png"
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
 
 def parse_job(body: dict[str, Any], context_size: int, in_dir: Path) -> Job:

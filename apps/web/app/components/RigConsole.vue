@@ -9,12 +9,24 @@
  * more -- whether the mesh is in an A- or T-pose, whether the arms are clear
  * of the body -- was decided when the mesh was made, which is why the hints
  * here point back at that.
+ *
+ * Two ways to run it. *Detect skeleton* stops after the networks and opens the
+ * rig editor, where joints can be moved and weights repainted before anything
+ * is bound; *Approve & rig* there runs Blender on the reviewed rig. *Rig without
+ * review* does both in one go, as before.
  */
 import { computed, ref, watch } from 'vue';
 
 import type { ArmSummary } from '@ai-studio/arm-contract';
 
-import type { ArmRigReport, RigGenerateRequest, RigGenerateResponse } from '#shared/generate';
+import type {
+  ArmRigReport,
+  RigBoneEdits,
+  RigDraftRequest,
+  RigDraftResponse,
+  RigGenerateRequest,
+  RigGenerateResponse,
+} from '#shared/generate';
 import {
   formatBytes,
   formatCount,
@@ -28,6 +40,7 @@ import { restoreKey } from '../utils/restore';
 import JobTimeline from './JobTimeline.vue';
 import MediaPicker from './MediaPicker.vue';
 import ModelViewer from './ModelViewer.vue';
+import RigEditor from './rig/RigEditor.vue';
 import VramChart from './VramChart.vue';
 import UiAlert from './ui/Alert.vue';
 import UiButton from './ui/Button.vue';
@@ -121,7 +134,10 @@ watch(
   { immediate: true },
 );
 
-const status = ref<'idle' | 'running'>('idle');
+const status = ref<'idle' | 'detecting' | 'running'>('idle');
+/** The draft under review, and whether the editor is showing it. */
+const draftId = ref<string | null>(null);
+const editing = ref(false);
 const failure = ref<string | null>(null);
 const result = ref<MediaItem | null>(null);
 const report = ref<ArmRigReport | null>(null);
@@ -131,7 +147,50 @@ const { job, machine, armVram, capacityGib, available, elapsedSeconds, watch: fo
 
 const canRun = computed(() => meshId.value !== null && arm.value !== null && status.value === 'idle');
 
-async function run(): Promise<void> {
+watch(meshId, () => {
+  // A draft belongs to the mesh it was detected on.
+  draftId.value = null;
+  editing.value = false;
+});
+
+/** Run the networks only, then open the editor on what they found. */
+async function detect(): Promise<void> {
+  if (!canRun.value || !arm.value || !meshId.value) return;
+  status.value = 'detecting';
+  failure.value = null;
+  result.value = null;
+  report.value = null;
+  const jobId = crypto.randomUUID();
+  const body: RigDraftRequest = { jobId, meshId: meshId.value, removeFingers: removeFingers.value };
+  follow(jobId);
+  try {
+    const answer = await $fetch<RigDraftResponse>(`/api/arms/${encodeURIComponent(arm.value.id)}/rig-draft`, {
+      method: 'POST',
+      body,
+    });
+    draftId.value = answer.draftId;
+    editing.value = true;
+  } catch (error) {
+    failure.value = describeFetchError(error);
+  } finally {
+    status.value = 'idle';
+  }
+}
+
+async function discardDraft(): Promise<void> {
+  const id = draftId.value;
+  editing.value = false;
+  draftId.value = null;
+  if (id) await $fetch(`/api/rig/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+}
+
+/** Bind the reviewed draft: the editor has already saved any repainted weights. */
+function approve(bones: RigBoneEdits): void {
+  editing.value = false;
+  void run({ bones });
+}
+
+async function run(review?: { bones: RigBoneEdits }): Promise<void> {
   if (!canRun.value || !arm.value || !meshId.value) return;
   status.value = 'running';
   failure.value = null;
@@ -156,6 +215,7 @@ async function run(): Promise<void> {
     meshId: meshId.value,
     settings,
     ...(note.value.trim() ? { note: note.value.trim() } : {}),
+    ...(review && draftId.value ? { draftId: draftId.value, bones: review.bones } : {}),
   };
   follow(jobId);
   try {
@@ -286,12 +346,33 @@ async function run(): Promise<void> {
         </UiField>
 
         <div class="flex flex-wrap items-center gap-3">
-          <UiButton variant="primary" :disabled="!canRun" data-testid="rig" @click="run">
-            {{ status === 'running' ? 'Rigging…' : 'Rig & animate' }}
+          <UiButton variant="primary" :disabled="!canRun" data-testid="detect" @click="detect">
+            {{ status === 'detecting' ? 'Detecting…' : 'Detect skeleton' }}
+          </UiButton>
+          <UiButton
+            v-if="draftId && !editing"
+            :disabled="status !== 'idle'"
+            data-testid="reopen"
+            @click="editing = true"
+          >
+            Reopen editor
+          </UiButton>
+          <UiButton
+            :disabled="!canRun"
+            data-testid="rig"
+            title="Detect and bind in one go, without reviewing the skeleton"
+            @click="run()"
+          >
+            {{ status === 'running' ? 'Rigging…' : 'Rig without review' }}
           </UiButton>
           <UiButton v-if="job && status === 'running'" @click="stopWatching()">Stop watching</UiButton>
           <NuxtLink to="/library" class="ml-auto"><UiButton>Library →</UiButton></NuxtLink>
         </div>
+
+        <p class="text-xs text-slate-500">
+          Detect skeleton opens an editor on what the networks found: drag joints into place, paint weights,
+          bend it to check — then approve, and Blender binds it with the clips.
+        </p>
 
         <UiAlert v-if="failure" tone="error">{{ failure }}</UiAlert>
 
@@ -328,6 +409,16 @@ async function run(): Promise<void> {
         </p>
       </aside>
     </div>
+
+    <RigEditor
+      v-if="editing && draftId"
+      :key="draftId"
+      :draft-id="draftId"
+      :mesh-name="mesh?.name ?? 'mesh'"
+      :busy="status === 'running'"
+      @approve="approve"
+      @discard="discardDraft"
+    />
 
     <MediaPicker
       :open="picking"

@@ -71,3 +71,35 @@ def test_builtin_clips_are_well_formed() -> None:
                 assert bone[0].isupper() and ":" not in bone
                 for axis, degrees in turns:
                     assert len(axis) == 3 and abs(degrees) <= 90
+
+
+def test_a_draft_needs_a_mesh_and_a_draft_folder_but_no_output(roots: tuple[Path, Path, Path]) -> None:
+    job = parse_job({"mode": "draft", "meshPath": "hero.glb", "draftDir": ".rig-drafts/abcdefgh12"}, *roots)
+    assert job.mode == "draft" and job.out_path is None and job.clips == []
+    assert job.draft_dir == (roots[0] / ".rig-drafts" / "abcdefgh12").resolve()
+
+
+def test_a_bind_needs_a_draft_that_exists(roots: tuple[Path, Path, Path]) -> None:
+    draft = {"mode": "bind", "outPath": "rig/hero.glb", "draftDir": ".rig-drafts/abcdefgh12"}
+    with pytest.raises(JobError, match="not a draft"):
+        parse_job(draft, *roots)
+    (roots[0] / ".rig-drafts" / "abcdefgh12").mkdir(parents=True)
+    (roots[0] / ".rig-drafts" / "abcdefgh12" / "rig.npz").write_bytes(b"npz")
+    bones = {"mixamorig:Hips": {"head": [0, 0, 0], "tail": [0, 1, 0]}}
+    job = parse_job({**draft, "clips": ["Idle"], "bones": bones}, *roots)
+    assert job.mesh_path is None and job.bones == bones and job.clips == ["builtin:Idle"]
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"mode": "nope"}, "mode"),
+        ({"mode": "draft", "draftDir": "elsewhere/abcdefgh12"}, "draftDir"),
+        ({"mode": "draft", "draftDir": ".rig-drafts/../../x"}, "draftDir"),
+        ({"mode": "draft", "draftDir": ".rig-drafts/short"}, "draftDir"),
+        ({"bones": {}}, "only for mode bind"),
+    ],
+)
+def test_rejects_bad_modes(roots: tuple[Path, Path, Path], extra: dict, message: str) -> None:
+    with pytest.raises(JobError, match=message):
+        parse_job(body(**extra), *roots)

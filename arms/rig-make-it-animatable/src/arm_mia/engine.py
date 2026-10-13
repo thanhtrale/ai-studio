@@ -24,7 +24,6 @@ import contextlib
 import io
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +44,6 @@ _COMPONENTS = (
     "output_anim",
     "output_anim_vis",
 )
-
-
-@dataclass
-class RigResult:
-    npz: Path
-    bones: int
-    vertices: int
 
 
 class Engine:
@@ -81,55 +73,66 @@ class Engine:
         self.app = app_v2
         self.root = root
 
-    def predict(self, mesh_path: Path, scratch: Path, remove_fingers: bool, inplace: bool) -> RigResult:
-        """Joints, weights and T-pose for one mesh, saved for `blend.py`."""
+    def predict(self, mesh_path: Path, remove_fingers: bool, inplace: bool) -> dict[str, Any]:
+        """Joints, weights and T-pose for one mesh, as the dict `rigdata` works on.
+
+        `prepare_input` writes its intermediate GLBs beside the input, so
+        `mesh_path` should be a copy in scratch rather than the library's file.
+        """
         app = self.load() or self.app
-        scratch.mkdir(parents=True, exist_ok=True)
         db = app.DB()
         app.clear(db)
         app.fix_random()
 
-        # `prepare_input` writes its intermediate GLBs beside the input, so the
-        # input is a copy in scratch rather than the library's file.
         app.prepare_input(str(mesh_path), False, 0.0, db, False)
 
         # Not at the top: trimesh's and scipy's DLLs must load after bpy's (`vendor.install`).
-        from . import surface, weights
+        from . import frame, surface, weights
 
         # A closed mesh is read as it is; the shell, rebuilt, is never as true to it.
         use_shell = not surface.is_closed(db.mesh)
         original = app.sample_mesh
+        hips_transform = app.get_hips_transform
         if use_shell:
             self._sample_shell(db)
             app.sample_mesh = self._shell_sampler(db, original)
+        # Upright: see `frame`. A tilted hips frame comes back as a twisted body.
+        app.get_hips_transform = frame.upright(hips_transform)
         try:
             app.preprocess(db)
         finally:
             app.sample_mesh = original
+            app.get_hips_transform = hips_transform
         app.infer(True, db)
         app.vis(True, "LeftArm", remove_fingers, False, db)
 
         bw = np.asarray(db.bw).reshape(len(db.mesh.vertices), -1)
+        bw = weights.prune_far(bw, db.mesh.vertices, db.joints, db.joints_tail)
         bw = weights.clean(bw, db.mesh.vertices, db.faces, smooth=weights.SMOOTH_ROUNDS if use_shell else 0)
 
-        data = {
-            "mesh": np.array(db.mesh, dtype=object),
+        return {
+            "mesh": db.mesh,
             "joints": db.joints,
             "joints_tail": db.joints_tail,
             "bw": bw,
-            "pose": db.pose if db.pose is not None else np.array(None, dtype=object),
-            "bones_idx_dict": np.array(dict(app.BONES_IDX_DICT), dtype=object),
+            "pose": frame.untwist(db.pose, db.joints, db.joints_tail) if db.pose is not None else None,
+            "bones_idx_dict": dict(app.BONES_IDX_DICT),
+            # Aligned with BONES_IDX_DICT: `vis` reads them together.
+            "parents": np.asarray(app.KINEMATIC_TREE.parent_indices, dtype=np.int64),
             "options": json.dumps(
                 {
                     "remove_fingers": remove_fingers,
                     "inplace": inplace,
-                    "pose_ignore": app.get_pose_ignore_list(None, None),
+                    # With the fingers folded in, a hand is a mitten, and the pose
+                    # network reads a fist as a hand turned over -- 170-odd degrees
+                    # that, made the rest, wrench the wrist. It follows the forearm.
+                    "pose_ignore": [
+                        *app.get_pose_ignore_list(None, None),
+                        *(["Hand"] if remove_fingers else []),
+                    ],
                 }
             ),
         }
-        out = scratch / "rig.npz"
-        np.savez(out, **data)
-        return RigResult(npz=out, bones=len(app.BONES_IDX_DICT), vertices=len(db.mesh.vertices))
 
     def _sample_shell(self, db: Any) -> None:
         """Swap `prepare_input`'s samples and vertex normals for the outer shell's."""

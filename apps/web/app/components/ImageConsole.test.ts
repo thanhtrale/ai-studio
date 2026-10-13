@@ -102,8 +102,8 @@ describe('ImageConsole arm selection', () => {
     expect(wrapper.find('#sampler').exists()).toBe(true);
     expect(wrapper.find('#scheduler').exists()).toBe(true);
     expect(wrapper.find('#flow').exists()).toBe(true);
-    // No rewriter on this arm, so no control claiming there is one.
-    expect(wrapper.text()).not.toContain('Rewrite the prompt first');
+    // The enhancer runs on its own arm, so it is offered whichever image arm is picked.
+    expect(wrapper.find('[data-testid="enhance"]').exists()).toBe(true);
   });
 
   it('hides the controls a turbo arm has nowhere to put', async () => {
@@ -116,7 +116,9 @@ describe('ImageConsole arm selection', () => {
     expect(wrapper.find('#flow').exists()).toBe(false);
     // The seed has to survive the fields around it disappearing.
     expect(wrapper.find('#seed-turbo').exists()).toBe(true);
-    expect(wrapper.text()).toContain('Rewrite the prompt first');
+    expect(wrapper.find('[data-testid="enhance"]').exists()).toBe(true);
+    // The style box and its presets are gone; the enhancer replaced them.
+    expect(wrapper.find('#style').exists()).toBe(false);
   });
 
   it('snaps the frame onto the selected arm\u2019s own grid', async () => {

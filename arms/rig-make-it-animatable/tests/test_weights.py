@@ -65,3 +65,22 @@ def test_smoothing_evens_out_a_step_between_neighbours():
     jump = lambda w: np.abs(np.diff(w[:8, 1])).max()  # noqa: E731
     assert jump(out) < jump(bw) / 2
     np.testing.assert_allclose(out.sum(axis=1), 1.0)
+
+
+def test_weight_on_a_bone_across_the_body_is_taken_away():
+    # A hand out to the side, a head above the spine; one vertex in the hand
+    # holding a fifth of itself on the head, as the network sometimes leaves it.
+    heads = np.array([[0.6, 0.6, 0.0], [0.0, 0.7, 0.0], [0.0, -0.9, 0.0]])
+    tails = np.array([[0.7, 0.6, 0.0], [0.0, 0.9, 0.0], [0.0, 0.7, 0.0]])
+    vertices = np.array(
+        [[0.65, 0.62, 0.0], [0.0, 0.8, 0.05], [0.05, 0.7, 0.0], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]]
+    )
+    bw = np.array([[0.8, 0.2, 0.0], [0.1, 0.9, 0.0], [0.0, 0.3, 0.7], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+
+    out = weights.prune_far(bw, vertices, heads, tails)
+
+    assert np.allclose(out[0], [1.0, 0.0, 0.0])
+    assert np.allclose(out[1], [0.0, 1.0, 0.0])
+    # Head and spine meet at the neck: a vertex near both keeps both.
+    assert out[2, 1] > 0
+    assert np.allclose(out.sum(axis=1), 1)

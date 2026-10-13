@@ -147,3 +147,29 @@ def test_the_request_the_child_sees(inputs: Path) -> None:
 
     # Unrestricted thinking is the child's default and is left unsaid.
     assert "reasoning_budget" not in _request(parse_job({"prompt": "x"}, CTX, inputs))
+
+
+def test_webp_is_sent_as_png_because_the_child_cannot_decode_it(inputs: Path) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGBA", (4, 3), (255, 0, 0, 128)).save(buffer, format="WEBP")
+    (inputs / "refs" / "c.webp").write_bytes(buffer.getvalue())
+
+    job = parse_job({"prompt": "describe", "images": ["refs/c.webp"]}, CTX, inputs)
+
+    url = job.messages[-1]["content"][0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    with Image.open(BytesIO(base64.b64decode(url.split(",", 1)[1]))) as image:
+        assert image.format == "PNG"
+        assert image.size == (4, 3)
+        assert image.mode == "RGBA"
+    assert job.images == ["refs/c.webp"]
+
+
+def test_a_broken_webp_is_refused_by_name(inputs: Path) -> None:
+    (inputs / "refs" / "bad.webp").write_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 junk")
+    with pytest.raises(JobError, match=r"bad.webp is WebP"):
+        parse_job({"prompt": "describe", "images": ["refs/bad.webp"]}, CTX, inputs)
