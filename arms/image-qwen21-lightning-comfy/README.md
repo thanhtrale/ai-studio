@@ -1,33 +1,41 @@
-# image-qwen21-turbo-comfy
+# image-qwen21-lightning-comfy
 
-Qwen-Image 2.1 with the [viggle-turbo] LoRA, on [ComfyUI], as a resident arm.
+Qwen-Image 2.1 with lightx2v's [Lightning] 4-step LoRA, on [ComfyUI], as a resident arm.
 
-The sibling of `image-qwen-edit-comfy`: same shape, same studio job schema,
-different model and a very different sampler. Six transformer passes instead of
-forty, no classifier-free guidance, and an explicit sigma schedule the LoRA was
-distilled against.
+It replaced `image-qwen21-turbo-comfy` (viggle-turbo, six steps; removed, still in git history):
+same code, same graph, same job schema, a different LoRA and four steps by default. Measured on the
+RTX 4080 with a warm model at 1024x1024: about 4.6 s for four steps against 6.6 s for viggle-turbo's
+six, and running viggle-turbo at four steps ghosts the arms and hands -- that is why this arm exists.
 
-> **Licence.** viggle-turbo is a derivative of Qwen-Image 2.1 and ships under the
-> Qwen RESEARCH LICENSE: **non-commercial use only**. The base weights are under
-> the same licence. Commercial use needs a separate licence from the licensor.
+> **Licence.** Lightning is a derivative of Qwen-Image 2.1, whose weights are under the Qwen RESEARCH
+> LICENSE: **non-commercial use only**. The Lightning model card states no licence of its own.
 
-## What is different from the edit arm
+## What is different from the viggle-turbo arm
 
-| | `image-qwen-edit-comfy` | this arm |
+| | `image-qwen21-turbo-comfy` | this arm |
 | --- | --- | --- |
-| Transformer | Qwen-Image-Edit 2511 | Qwen-Image 2.1 |
-| Text encoder | Qwen2.5-VL 7B | Qwen3-VL 8B |
-| VAE latent | 16 channels, ⅛ scale | 64 channels, ¹⁄₁₆ scale |
-| Sampler | `KSampler`, CFG, a named scheduler | `SamplerCustomAdvanced` on `ViggleTurboSigmas`, unguided |
-| Steps | 4 (distilled merge) or 20–40 | 6 |
-| Edge multiple | 16 | 32 |
-| References | up to 3 | up to 3 |
-| Prompt enhancer | none | optional, on the same text encoder |
+| LoRA | viggle-turbo v0.2.1, rank 256, attention + MLP + modulation | Lightning, rank 16, attention q/k/v/out only (67 MB) |
+| Steps | 6 | 4 (`sigma_nodes(4)` = `[1.0, 0.75, 0.5, 0.25]`, Lightning's training schedule) |
+| Shift | dynamic exponential, 256..8192 tokens, 0.5..0.9 | the same -- `ViggleTurboSigmas` matches the Lightning card exactly |
+| Scratch | `cache/comfy21` | `cache/comfy21-lightning` |
 
-`cfgScale`, `scheduler` and `flowShift` arrive in the job and mean nothing here:
-there is no guidance to scale, the schedule is the LoRA's own, and its shift is
-computed from the frame. They are accepted rather than refused so one console
-can drive both arms, and the job's step says so.
+**The LoRA file is renamed, not retrained.** Hugging Face ships `pytorch_lora_weights.safetensors` with
+PEFT `...lora.down.weight` / `...lora.up.weight` keys; `ViggleTurboLora` reads `...lora_A.weight` /
+`...lora_B.weight` and silently applies nothing to keys it does not recognise. The default file is the
+same tensors and metadata under the `lora_A`/`lora_B` names:
+
+```python
+from safetensors import safe_open
+from safetensors.torch import save_file
+with safe_open("pytorch_lora_weights.safetensors", "pt") as s:
+    out = {k.replace(".lora.down.weight", ".lora_A.weight").replace(".lora.up.weight", ".lora_B.weight"): s.get_tensor(k)
+           for k in s.keys()}
+    save_file(out, "Qwen-Image-2.1-Lightning-4step-r16.safetensors", metadata=s.metadata())
+```
+
+**Runtime.** `.venv/`, `vendor/` and `custom_nodes/` were moved here from the turbo arm when it was
+removed. The venv's console-script launchers (`pip.exe`, `pytest.exe`) still point at the old folder; use
+`.venv\Scripts\python.exe -m pip` / `-m pytest`, or rebuild per "Installing the runtime".
 
 ## The graph
 
@@ -111,7 +119,7 @@ Relative to managed storage, and matching the defaults in
 | `diffusionModel` | `models/qwen-image-2.1/diffusion_models/qwen_image_2.1_bf16.safetensors` | 13.3 GB |
 | `textEncoder` | `models/qwen-image-2.1/text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 8.7 GB |
 | `vae` | `models/qwen-image-2.1/vae/qwen_image_2.1_vae_bf16.safetensors` | 0.6 GB |
-| `turboLora` | `models/qwen-image-2.1/loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors` | 1.3 GB |
+| `turboLora` | `models/qwen-image-2.1/loras/Qwen-Image-2.1-Lightning-4step-r16.safetensors` | 67 MB |
 
 The base files are Comfy-Org's, the ones ComfyUI's own Qwen-Image 2.1 template
 uses; `qwen3vl_8b_bf16.safetensors` (16.3 GB) is a drop-in swap for the text
@@ -144,3 +152,4 @@ the file, build the timeline — runs on a machine with no GPU at all.
 
 [ComfyUI]: https://github.com/comfyanonymous/ComfyUI
 [viggle-turbo]: https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo
+[Lightning]: https://huggingface.co/lightx2v/Qwen-Image-2.1-Lightning

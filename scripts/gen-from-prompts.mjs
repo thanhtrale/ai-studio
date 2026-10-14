@@ -19,7 +19,7 @@ import { parseArgs } from 'node:util';
 const { values } = parseArgs({
   options: {
     file: { type: 'string' },
-    arm: { type: 'string', default: 'image-qwen21-turbo-comfy' },
+    arm: { type: 'string', default: 'image-qwen21-lightning-comfy' },
     base: { type: 'string', default: 'http://127.0.0.1:3000' },
     limit: { type: 'string' },
     every: { type: 'string' },

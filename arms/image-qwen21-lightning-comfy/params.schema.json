@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Qwen-Image 2.1 + viggle-turbo (ComfyUI) start parameters",
+  "title": "Qwen-Image 2.1 + Lightning 4-step (ComfyUI) start parameters",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -25,8 +25,8 @@
     "turboLora": {
       "type": "string",
       "format": "aistudio-path",
-      "description": "The viggle-turbo LoRA, applied unmerged at runtime. This arm is the six-step schedule that LoRA was distilled for; without it the graph would need forty steps and guidance.",
-      "default": "models/qwen-image-2.1/loras/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors"
+      "description": "lightx2v's Qwen-Image-2.1-Lightning, a 4-step DMD LoRA (rank 16 on the attention projections), applied unmerged at runtime by the same node as viggle-turbo. The download uses PEFT `lora.down/lora.up` key names; this file is the same tensors renamed to `lora_A/lora_B`, which is what that node reads. Without it the graph would need forty steps and guidance.",
+      "default": "models/qwen-image-2.1/loras/Qwen-Image-2.1-Lightning-4step-r16.safetensors"
     },
     "outputDir": {
       "type": "string",
@@ -44,29 +44,48 @@
       "type": "string",
       "format": "aistudio-path",
       "description": "Where ComfyUI keeps its own output, temp, user and database files. Nothing here is the library's; finished images are moved out of it.",
-      "default": "cache/comfy21"
+      "default": "cache/comfy21-lightning"
     },
     "weightDtype": {
       "type": "string",
-      "enum": ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+      "enum": [
+        "default",
+        "fp8_e4m3fn",
+        "fp8_e4m3fn_fast",
+        "fp8_e5m2"
+      ],
       "description": "How the transformer is held. The bf16 checkpoint is 13 GiB and the text encoder wants the rest of a 16 GiB card, so fp8 is what keeps both resident instead of streamed.",
       "default": "fp8_e4m3fn"
     },
     "textEncoderDevice": {
       "type": "string",
-      "enum": ["default", "cpu"],
+      "enum": [
+        "default",
+        "cpu"
+      ],
       "description": "cpu keeps Qwen3-VL off the card entirely. It also makes the prompt enhancer far slower, because the enhancer is that same model generating text.",
       "default": "default"
     },
     "vramMode": {
       "type": "string",
-      "enum": ["dynamic", "highvram", "lowvram", "novram"],
+      "enum": [
+        "dynamic",
+        "highvram",
+        "lowvram",
+        "novram"
+      ],
       "description": "dynamic is ComfyUI's own memory manager, which streams whatever will not fit. The rest pin its behaviour.",
       "default": "dynamic"
     },
     "attention": {
       "type": "string",
-      "enum": ["pytorch", "sage", "flash", "split", "quad"],
+      "enum": [
+        "pytorch",
+        "sage",
+        "flash",
+        "split",
+        "quad"
+      ],
       "description": "Attention backend. sage and flash need their own packages installed into this arm's venv.",
       "default": "pytorch"
     },
@@ -79,19 +98,33 @@
     },
     "cacheMode": {
       "type": "string",
-      "enum": ["ram", "classic", "lru", "none"],
+      "enum": [
+        "ram",
+        "classic",
+        "lru",
+        "none"
+      ],
       "description": "What ComfyUI keeps between jobs. ram is its default; none re-runs every node each time, which throws away the cached prompt encode a batch depends on.",
       "default": "ram"
     },
     "kvCacheDevice": {
       "type": "string",
-      "enum": ["auto", "gpu", "cpu", "off"],
+      "enum": [
+        "auto",
+        "gpu",
+        "cpu",
+        "off"
+      ],
       "description": "Where Qwen-Image 2.1 keeps the attention prefix cache. auto uses spare VRAM then RAM; off recomputes the prefix every step, which is slower but rules the cache out.",
       "default": "auto"
     },
     "kvCacheDtype": {
       "type": "string",
-      "enum": ["default", "int8", "int4"],
+      "enum": [
+        "default",
+        "int8",
+        "int4"
+      ],
       "description": "Prefix cache precision. int8 halves it at about bf16 accuracy; int4 quarters it and roughly doubles the per-step error.",
       "default": "default"
     },

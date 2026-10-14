@@ -32,7 +32,7 @@ export interface Qwen21RewriteRequest {
 }
 
 /** Where the instructions live, relative to the arms directory. */
-const PROMPTS = path.join('image-qwen21-turbo-comfy', 'src', 'arm_qwen21', 'rewrite');
+const PROMPTS = path.join('image-qwen21-lightning-comfy', 'src', 'arm_qwen21', 'rewrite');
 
 /** Viggle's system prompt for this request: the edit one when there are references. */
 export async function qwen21SystemPrompt(armsDir: string, references: number): Promise<string> {

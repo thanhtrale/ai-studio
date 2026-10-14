@@ -78,7 +78,7 @@ export default defineEventHandler(async (event): Promise<ImageEnhanceResponse> =
     } catch {
       throw new RelayError(
         'invalid_request',
-        'the Qwen-Image 2.1 rewriter instructions are missing -- is arms/image-qwen21-turbo-comfy installed?',
+        'the Qwen-Image 2.1 rewriter instructions are missing -- is arms/image-qwen21-lightning-comfy installed?',
       );
     }
 

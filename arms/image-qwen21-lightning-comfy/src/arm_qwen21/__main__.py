@@ -39,7 +39,7 @@ def main() -> None:
     parser.add_argument("--diffusion-model", required=True, help="Qwen-Image 2.1 transformer")
     parser.add_argument("--text-encoder", required=True, help="Qwen3-VL 8B")
     parser.add_argument("--vae", required=True, help="Qwen-Image 2.1 VAE")
-    parser.add_argument("--turbo-lora", required=True, help="viggle-turbo LoRA")
+    parser.add_argument("--turbo-lora", required=True, help="Lightning 4-step LoRA, lora_A/lora_B keys")
     parser.add_argument("--out-dir", required=True, help="root that every job output path is confined to")
     parser.add_argument(
         "--input-dir", required=True, help="root that a job's reference images are confined to"

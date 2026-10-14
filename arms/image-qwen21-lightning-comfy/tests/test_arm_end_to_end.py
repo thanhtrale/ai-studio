@@ -80,7 +80,7 @@ def test_a_single_image_run(arm: ArmState, tmp_path: Path) -> None:
     assert report["images"][0]["seed"] == 42
     # Six steps is the schedule, not a suggestion: it is what the LoRA was
     # distilled for and what the arm defaults to.
-    assert report["steps"] == 6
+    assert report["steps"] == 4
     assert report["prompt_used"] is None
     assert report["vram_scope"] in {"process", "card", "unavailable"}
 

@@ -5,8 +5,9 @@ Taken from the two workflows Viggle ships with the LoRA
 from first principles: the sampler here is not a KSampler at all, and the
 reason is specific to this LoRA.
 
-viggle-turbo is a distribution-matching distillation of the forty-step base
-model into six transformer passes. It was trained to land on particular noise
+This arm runs lightx2v's Lightning LoRA on that graph instead of viggle-turbo: also a
+distribution-matching distillation of the forty-step base, into four transformer passes.
+viggle-turbo (the sibling arm) is six. It was trained to land on particular noise
 levels, so it is sampled on an explicit sigma schedule -- `ViggleTurboSigmas`,
 which applies the pipeline's resolution-dependent shift to those nodes -- and
 with no classifier-free guidance at all, which is why the model reaches a
@@ -28,9 +29,10 @@ from typing import Any
 #: trained on at most three references and the README says so.
 MAX_REFERENCES = 3
 
-#: The schedule the v0.2.1 LoRA was shipped with, and the number of steps that
-#: produces it. Both are defaults, not limits -- see `sigma_nodes`.
-DEFAULT_STEPS = 6
+#: Lightning is a four-step student: [1.0, 0.75, 0.5, 0.25] is its training schedule,
+#: with the same dynamic exponential shift `ViggleTurboSigmas` applies (256..8192
+#: tokens, 0.5..0.9). More steps are allowed -- see `sigma_nodes` -- but untested.
+DEFAULT_STEPS = 4
 #: Everything below 0.875 is where the student was trained to land. Extra steps
 #: are added at the high-noise end only; moving these makes every image softer.
 SIGMA_TAIL = (0.875, 0.75, 0.5, 0.25)

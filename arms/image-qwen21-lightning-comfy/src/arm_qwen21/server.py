@@ -26,7 +26,7 @@ from .graph import Models
 from .progress import JobProgress
 from .runtime import ChildFailed, ComfyServer, LoadConfig
 
-ARM_ID = "image-qwen21-turbo-comfy"
+ARM_ID = "image-qwen21-lightning-comfy"
 # Reference images arrive as paths, not bytes, so a job body stays small.
 MAX_BODY_BYTES = 256 * 1024
 

@@ -22,7 +22,7 @@ describe('scaffolded arm packages', () => {
       expect.arrayContaining([
         'text-llamacpp-cu124',
         'image-qwen-edit-comfy',
-        'image-qwen21-turbo-comfy',
+        'image-qwen21-lightning-comfy',
         'video-minimax-h3-comfy',
         'text-qwen3vl-8b-llamacpp',
       ]),
@@ -81,7 +81,7 @@ describe('scaffolded arm packages', () => {
   // declares nothing because nothing has been built to drive it.
   it.each([
     ['image-qwen-edit-comfy', ['image.generate']],
-    ['image-qwen21-turbo-comfy', ['image.generate']],
+    ['image-qwen21-lightning-comfy', ['image.generate']],
     ['video-minimax-h3-comfy', ['video.generate']],
     ['text-qwen3vl-8b-llamacpp', ['text.vision']],
     ['text-llamacpp-cu124', []],

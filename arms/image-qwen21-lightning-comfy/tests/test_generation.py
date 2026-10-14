@@ -37,7 +37,7 @@ def parse(body: dict, roots: tuple[Path, Path]):
 def test_the_defaults_are_the_lora_s(roots: tuple[Path, Path]) -> None:
     job = parse({}, roots)
 
-    assert (job.steps, job.sampler, job.batch) == (6, "euler", 1)
+    assert (job.steps, job.sampler, job.batch) == (4, "euler", 1)
     assert (job.width, job.height) == (1024, 1024)
     assert job.enhance_prompt is False
 
@@ -49,7 +49,7 @@ def test_guidance_and_scheduler_are_accepted_and_ignored(roots: tuple[Path, Path
     # guidance, a scheduler or a flow shift.
     job = parse({"cfgScale": 4.0, "scheduler": "beta", "flowShift": 3.1}, roots)
 
-    assert job.steps == 6
+    assert job.steps == 4
 
 
 def test_an_output_path_may_not_leave_the_output_root(roots: tuple[Path, Path]) -> None:

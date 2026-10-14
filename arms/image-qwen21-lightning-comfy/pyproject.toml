@@ -1,7 +1,7 @@
 [project]
-name = "arm-qwen21-turbo"
+name = "arm-qwen21-lightning"
 version = "0.1.0"
-description = "ai-studio image arm hosting Qwen-Image 2.1 with the viggle-turbo LoRA on a ComfyUI child process"
+description = "ai-studio image arm hosting Qwen-Image 2.1 with the lightx2v Lightning 4-step LoRA on a ComfyUI child process"
 requires-python = ">=3.12"
 # Nothing of this arm's own. ComfyUI runs in a child process with its own very
 # large dependency tree, installed into the same venv from vendor/ComfyUI's

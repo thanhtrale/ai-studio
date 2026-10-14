@@ -1,5 +1,5 @@
-id: image-qwen21-turbo-comfy
-name: Qwen-Image 2.1 + viggle-turbo (ComfyUI)
+id: image-qwen21-lightning-comfy
+name: Qwen-Image 2.1 + Lightning 4-step (ComfyUI)
 modality: image
 protocol: native
 lifecycle: resident

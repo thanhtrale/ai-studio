@@ -39,7 +39,7 @@ NAME = re.compile(r"^[a-z0-9_+.\-/]{1,40}$")
 # so: a batch is a number someone can mistype, and this arm holds the card
 # until it is done.
 MAX_BATCH = 100
-# The LoRA is a six-step student. More than a handful of extra steps is not a
+# The LoRA is a four-step student. More than a handful of extra steps is not a
 # schedule it was distilled for, and past about twenty it is only slower.
 MAX_STEPS = 32
 MAX_EDGE = 4096

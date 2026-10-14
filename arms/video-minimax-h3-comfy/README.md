@@ -2,7 +2,7 @@
 
 [MiniMax-H3] with the [Turbo LoRA], on [ComfyUI], as a resident arm.
 
-The video sibling of `image-qwen21-turbo-comfy`: same shape, same ComfyUI child,
+The video sibling of `image-qwen21-lightning-comfy`: same shape, same ComfyUI child,
 same distilled-student bargain. Four to eight transformer passes instead of
 twenty, no classifier-free guidance, and picture and **stereo audio denoised
 together** in one packed latent rather than layered on afterward.

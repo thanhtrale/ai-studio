@@ -42,7 +42,7 @@ def sampling(**overrides: object) -> Sampling:
     return Sampling(**base)  # type: ignore[arg-type]
 
 
-def test_the_six_step_schedule_is_the_one_the_lora_shipped_with() -> None:
+def test_the_six_step_schedule_still_subdivides_the_high_noise_end() -> None:
     assert sigma_nodes(6) == [1.0, 0.9375, 0.875, 0.75, 0.5, 0.25]
 
 
