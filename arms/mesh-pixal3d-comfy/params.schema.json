@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pixal3D (ComfyUI) start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "singleModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The single-view transformer, used when a job sends only views.front. Only an int8 build is published for it.",
+      "default": "models/pixal3d/pixal3d_int8_convrot.safetensors"
+    },
+    "multiviewModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The multi-view transformer, used when a job sends two views or more. bf16 is the default because int8 was measured to wash the hair and clothes towards brown, green, purple and pink (0 of 12 passed against 1 of 4 on bf16, same character and sheet); pixal3d_multiview_int8_convrot.safetensors is the 5.6 GB alternative.",
+      "default": "models/pixal3d/pixal3d_multiview_bf16.safetensors"
+    },
+    "clipVision": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "DINOv3 ViT-L with NAF, Pixal3D's own image encoder. Not the TRELLIS.2 arm's dino_v3_vit_l: a different file.",
+      "default": "models/pixal3d/dino_v3_L_naf_fp32.safetensors"
+    },
+    "shapeVae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The TRELLIS.2 shape VAE. Byte-identical to the TRELLIS.2 arm's (same sha256 in both Comfy-Org repos), so the file is shared.",
+      "default": "models/trellis2/trellis_2_shape_vae_bf16.safetensors"
+    },
+    "textureVae": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The TRELLIS.2 texture VAE, shared with the TRELLIS.2 arm for the same reason.",
+      "default": "models/trellis2/trellis_2_texture_vae_bf16.safetensors"
+    },
+    "bgModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "BiRefNet, which cuts the character out of each view before it is conditioned on.",
+      "default": "models/birefnet/birefnet.safetensors"
+    },
+    "mogeModel": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "MoGe-2, which estimates the camera's field of view for a single-view job.",
+      "default": "models/moge/moge_2_vitl_normal_fp16.safetensors"
+    },
+    "weightDtype": {
+      "type": "string",
+      "enum": [
+        "default",
+        "fp8_e4m3fn",
+        "fp8_e4m3fn_fast",
+        "fp8_e5m2"
+      ],
+      "description": "How the transformer is held. default keeps the file's own dtype. fp8 halves a bf16 build at load.",
+      "default": "default"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's reference image is confined to. ComfyUI is given this as its own input directory.",
+      "default": "inputs"
+    },
+    "scratchDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where ComfyUI keeps its own output, temp, user and database files. Kept apart from the other arms that share the same ComfyUI checkout.",
+      "default": "cache/comfy-pixal3d"
+    },
+    "vramMode": {
+      "type": "string",
+      "enum": [
+        "dynamic",
+        "highvram",
+        "lowvram",
+        "novram"
+      ],
+      "description": "dynamic is ComfyUI's own memory manager, which streams whatever will not fit. The rest pin its behaviour.",
+      "default": "dynamic"
+    },
+    "attention": {
+      "type": "string",
+      "enum": [
+        "pytorch",
+        "sage",
+        "flash",
+        "split",
+        "quad"
+      ],
+      "description": "Attention backend. sage and flash need their own packages installed into the shared venv.",
+      "default": "pytorch"
+    },
+    "reserveVram": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 8,
+      "description": "GiB left to the desktop compositor.",
+      "default": 0.8
+    },
+    "cacheMode": {
+      "type": "string",
+      "enum": [
+        "ram",
+        "classic",
+        "lru",
+        "none"
+      ],
+      "description": "What ComfyUI keeps between jobs. ram keeps the loaders, the cut-outs and the image encode, so a batch's later seeds skip them.",
+      "default": "ram"
+    },
+    "extraArgs": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Extra ComfyUI command line flags, split on whitespace and passed through verbatim.",
+      "default": ""
+    }
+  }
+}

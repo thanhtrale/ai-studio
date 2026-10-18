@@ -82,6 +82,10 @@ describe('scaffolded arm packages', () => {
   it.each([
     ['image-qwen-edit-comfy', ['image.generate']],
     ['image-qwen21-turbo-comfy', ['image.generate']],
+    ['image-qwen21-turbo-official-comfy', ['image.generate']],
+    ['mesh-pixal3d-comfy', ['mesh.views']],
+    ['rig-mia-skintokens', ['mesh.character-rig']],
+    ['mesh-char3d-tools', ['mesh.character-tools']],
     ['video-minimax-h3-comfy', ['video.generate']],
     ['text-qwen3vl-8b-llamacpp', ['text.vision']],
     ['text-llamacpp-cu124', []],

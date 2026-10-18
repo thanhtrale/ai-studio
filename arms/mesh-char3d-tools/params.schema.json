@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Character tools start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "modelsDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The studio's models directory. The scripts look under rig/ in it: the Mixamo skeleton and clips, the Hunyuan3D 2.1 ShapeVAE, SkinTokens' checkpoints. See README.md for the layout.",
+      "default": "models"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job input path is confined to.",
+      "default": "inputs"
+    }
+  }
+}

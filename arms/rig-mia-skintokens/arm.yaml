@@ -1,0 +1,45 @@
+id: rig-mia-skintokens
+name: Character rig — Make-It-Animatable v2 joints, SkinTokens weights, Mixamo clips
+modality: mesh
+protocol: native
+lifecycle: resident
+capabilities:
+  # Not mesh.rig: that is the rig console's contract (draft/bind, clip names).
+  # This arm takes the character pipeline's job -- see README.md.
+  - mesh.character-rig
+resources:
+  gpu: exclusive
+  # Measured on the character pipeline (RTX 5070 12 GB): MIA peaks at ~8.6 GB;
+  # SkinTokens runs after MIA has been released, ~3.8 GB with SDPA.
+  vramEstimateMb: 9000
+launch:
+  cwd: .
+  # Python 3.11, because that is what Blender's bpy 4.3 wheel is built for.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_mia_st"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--role"
+    - "rig"
+    - "--models-dir"
+    - "{{modelsDir}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    GRADIO_ANALYTICS_ENABLED: "False"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

@@ -25,6 +25,14 @@ export const ARM_CAPABILITIES = [
   'video.generate',
   'mesh.generate',
   'mesh.rig',
+  // The 3D character pipeline's three contracts, each its own because each
+  // job body is: several named views in (Pixal3D), a character rig with
+  // SkinTokens weights, and the CPU tools between the steps (sheet split,
+  // colour re-projection, check renders). `mesh.generate` and `mesh.rig` stay
+  // the 3D and rig consoles', whose bodies these arms would not understand.
+  'mesh.views',
+  'mesh.character-rig',
+  'mesh.character-tools',
   'text.generate',
   'text.vision',
 ] as const;

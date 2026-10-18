@@ -65,6 +65,18 @@ const FUNCTIONS: StudioFunction[] = [
     glyph: '◆',
   },
   {
+    key: 'char3d',
+    title: '3D characters',
+    blurb:
+      'A reference image to a rigged, animated character, one reviewed step at a time: a three-view A-pose ' +
+      'sheet from Qwen-Image-2.1-Turbo, a Pixal3D mesh with the colours of those views projected back, then ' +
+      'Make-It-Animatable joints and SkinTokens weights on a Mixamo skeleton.',
+    modality: 'mesh',
+    capability: 'mesh.views',
+    to: '/char3d',
+    glyph: '◈',
+  },
+  {
     key: 'analyze',
     title: 'Requirements analysis',
     blurb:

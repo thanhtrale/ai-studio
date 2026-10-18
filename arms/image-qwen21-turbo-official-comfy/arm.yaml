@@ -1,0 +1,69 @@
+id: image-qwen21-turbo-official-comfy
+name: Qwen-Image-2.1-Turbo official (ComfyUI)
+modality: image
+protocol: native
+lifecycle: resident
+capabilities:
+  - image.generate
+resources:
+  gpu: exclusive
+  # The int8 transformer (6.8 GiB), the int8 Qwen3-VL text encoder (8.7 GiB)
+  # and the VAE: more than the card next to the activations, so ComfyUI
+  # streams the encoder. Not measured on this arm yet -- the sibling viggle
+  # arm's figure, which loads the same encoder and VAE.
+  vramEstimateMb: 15500
+launch:
+  cwd: .
+  # The viggle-turbo arm's interpreter and ComfyUI checkout, shared rather
+  # than cloned. See README.md.
+  command: ../image-qwen21-turbo-comfy/.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_qwen21_official"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--diffusion-model"
+    - "{{diffusionModel}}"
+    - "--text-encoder"
+    - "{{textEncoder}}"
+    - "--vae"
+    - "{{vae}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+    - "--scratch-dir"
+    - "{{scratchDir}}"
+    - "--weight-dtype"
+    - "{{weightDtype}}"
+    - "--text-encoder-device"
+    - "{{textEncoderDevice}}"
+    - "--vram-mode"
+    - "{{vramMode}}"
+    - "--attention"
+    - "{{attention}}"
+    - "--reserve-vram"
+    - "{{reserveVram}}"
+    - "--cache-mode"
+    - "{{cacheMode}}"
+    - "--kv-cache-device"
+    - "{{kvCacheDevice}}"
+    - "--kv-cache-dtype"
+    - "{{kvCacheDtype}}"
+    - "--extra-args"
+    - "{{extraArgs}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  # Answers as soon as this arm is listening. ComfyUI itself is started by the
+  # first job, because importing torch and scanning nodes outlasts any sensible
+  # health timeout.
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

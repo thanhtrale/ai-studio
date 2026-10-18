@@ -539,6 +539,7 @@ export function shortDescription(item: MediaItem, { arm = true } = {}): string {
 const ARM_TAGS: Record<string, readonly string[]> = {
   'image-qwen-edit-comfy': ['comfy', 'qwen2511'],
   'image-qwen21-turbo-comfy': ['comfy', 'qwen2.1', 'turbo'],
+  'image-qwen21-turbo-official-comfy': ['comfy', 'qwen2.1', 'turbo-official'],
   'video-ltx25-diffusers': ['diffusers', 'ltx2.5'],
   'mesh-hunyuan3d-comfy': ['comfy', 'hunyuan3d2.1'],
   'mesh-trellis2-comfy': ['comfy', 'trellis2'],

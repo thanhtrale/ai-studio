@@ -170,6 +170,18 @@ capabilities: [image.generate]
       expect(result.manifest.capabilities).toEqual(['image.generate']);
     });
 
+    it('keeps the character pipeline contracts on a mesh arm', () => {
+      const result = parseArmManifestYaml(
+        `${RESIDENT_EXAMPLE.replace('modality: text', 'modality: mesh')}
+capabilities: [mesh.views, mesh.character-rig, mesh.character-tools]
+`,
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.manifest.capabilities).toEqual(['mesh.views', 'mesh.character-rig', 'mesh.character-tools']);
+    });
+
     it('allows one-shot arms to omit both health check and port', () => {
       const result = parseArmManifestYaml(`
 id: image-sdcpp-minimal

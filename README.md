@@ -90,6 +90,7 @@ Every view has a URL and every page is rendered on the server first — there is
 | `/` | what the studio can do, one card per function. A card says *no arm discovered* or *no console yet* rather than pretending |
 | `/generate/image` | the Qwen-Image-Edit console. Same two parameters, and a batch: one request, several files, each filed on its own |
 | `/generate/video` | the MiniMax-H3 console. `?from=<media id>` reloads a previous run's settings, `?reference=<media id>` starts from an image |
+| `/char3d` | 3D characters: a reference image to a rigged, animated character, one reviewed step at a time — sheet, mesh, rig. `/char3d/<id>?tab=&run=` is one character and one run; `/char3d/review` plays Mixamo clips on saved rigs. See [docs/char3d.md](docs/char3d.md) |
 | `/analyze/block` | a Figma frame and a Jira ticket, read separately and then compared. See below |
 | `/library` | everything in storage. `?folder=` and `?item=` are the selection, so a particular clip is a link |
 
@@ -195,6 +196,7 @@ The boundaries that are enforced:
 
 - [docs/hardware-baseline.md](docs/hardware-baseline.md) — measured ceilings of this machine: compute, PCIe, VRAM, storage.
 - [docs/stack-selection.md](docs/stack-selection.md) — how those numbers pick a runtime and precision for an arm, worked through for LTX-2.5.
+- [docs/char3d.md](docs/char3d.md) — the 3D character pipeline: what was measured, what each default is for, and what to check before trusting a step. Its evidence is [docs/log/char3d.md](docs/log/char3d.md), verbatim from companion-web.
 
 `scripts/probe-hardware.py` produces the baseline. Re-run it when the machine changes.
 
