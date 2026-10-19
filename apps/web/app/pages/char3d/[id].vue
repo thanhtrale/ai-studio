@@ -16,6 +16,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'v
 import type { Char3dDetail, Char3dGalleryItem, Char3dReviewEntry, Char3dRun, Char3dSheetSet, Char3dStep } from '#shared/char3d';
 import { galleryKey, SHEET_VIEWS } from '#shared/char3d';
 
+import Char3dLightbox from '../../components/char3d/Char3dLightbox.vue';
 import RunDetail from '../../components/char3d/RunDetail.vue';
 import UiAlert from '../../components/ui/Alert.vue';
 import UiBadge from '../../components/ui/Badge.vue';
@@ -25,6 +26,7 @@ import UiCheckbox from '../../components/ui/Checkbox.vue';
 import UiField from '../../components/ui/Field.vue';
 import UiInput from '../../components/ui/Input.vue';
 import UiSelect from '../../components/ui/Select.vue';
+import { char3dReviewItems } from '../../utils/char3dReview';
 
 type Tab = Char3dStep | 'runs';
 const TABS: Tab[] = ['ref', 'mesh', 'rig', 'runs'];
@@ -81,6 +83,23 @@ function meshThumb(run?: Char3dRun): string {
 }
 
 const actionError = ref<string | null>(null);
+
+// --- the lightbox: one run's outputs, full size, for review -------------------------
+const lightbox = ref<{ run: string; key: string } | null>(null);
+const lightboxItems = computed(() => {
+  const run = lightbox.value ? byId.value.get(lightbox.value.run) : undefined;
+  return run ? char3dReviewItems(run) : [];
+});
+/** Open a run's outputs at one item, or at the first (the mesh or the rig itself). */
+function review(run: string, key?: string): void {
+  const items = byId.value.has(run) ? char3dReviewItems(byId.value.get(run)!) : [];
+  const start = items.find((item) => item.key === key) ?? items[0];
+  if (start) lightbox.value = { run, key: start.key };
+}
+function reviewDetails(run: string): void {
+  lightbox.value = null;
+  openRun.value = run;
+}
 
 async function setGallery(add: boolean, run: string, set?: number): Promise<void> {
   actionError.value = null;
@@ -408,9 +427,20 @@ const running = (step: Tab): number =>
                 <div v-if="run.step === 'ref' && run.status === 'done'" class="flex flex-wrap gap-2">
                   <div v-for="set in sheetSets(run)" :key="set.index" class="space-y-1 rounded border border-white/10 p-1">
                     <span v-if="set.views" class="flex gap-0.5">
-                      <img v-for="view in SHEET_VIEWS" :key="view" :src="file(set.views[view])" alt="" class="h-32 w-24 rounded bg-white object-contain" />
+                      <button
+                        v-for="view in SHEET_VIEWS"
+                        :key="view"
+                        type="button"
+                        class="cursor-zoom-in"
+                        :title="`Review sheet ${set.index} · ${view}`"
+                        @click="review(run.id, `sheet-${set.index}-${view}`)"
+                      >
+                        <img :src="file(set.views[view])" alt="" class="h-32 w-24 rounded bg-white object-contain" />
+                      </button>
                     </span>
-                    <img v-else :src="file(set.sheet)" alt="" class="h-32 rounded bg-white object-contain opacity-60" />
+                    <button v-else type="button" class="cursor-zoom-in" :title="`Review sheet ${set.index}`" @click="review(run.id, `sheet-${set.index}`)">
+                      <img :src="file(set.sheet)" alt="" class="h-32 rounded bg-white object-contain opacity-60" />
+                    </button>
                     <div class="flex items-center gap-2 text-xs">
                       <span :class="set.check.ok ? 'text-emerald-300' : 'text-amber-300'">
                         {{ set.views ? `w ${pct(set.check.widthDiff)} · h ${pct(set.check.heightDiff)}` : `${set.check.segments} figures` }}
@@ -423,8 +453,13 @@ const running = (step: Tab): number =>
                   </div>
                 </div>
                 <div v-else-if="run.status === 'done'" class="flex items-end gap-2">
-                  <img :src="meshThumb(run)" alt="" class="h-36 rounded bg-white object-contain" />
-                  <UiButton size="sm" @click="setGallery(true, run.id)">Add to gallery</UiButton>
+                  <button type="button" class="cursor-zoom-in" :title="`Review ${run.id}`" @click="review(run.id)">
+                    <img :src="meshThumb(run)" alt="" class="h-36 rounded bg-white object-contain" />
+                  </button>
+                  <div class="space-y-1">
+                    <UiButton size="sm" variant="primary" @click="review(run.id)">Review {{ run.step === 'rig' ? 'rig' : 'mesh' }}</UiButton>
+                    <UiButton size="sm" @click="setGallery(true, run.id)">Add to gallery</UiButton>
+                  </div>
                 </div>
               </div>
             </UiCard>
@@ -438,7 +473,12 @@ const running = (step: Tab): number =>
             <div class="flex flex-wrap gap-3">
               <UiCard v-for="item in galleryOfStep(tab)" :key="galleryKey(item)" :class="tab === 'ref' ? 'w-80' : 'w-52'">
                 <div class="space-y-2 p-2">
-                  <button type="button" class="flex w-full justify-center gap-0.5 rounded bg-white" :title="`Open ${item.run}`" @click="openRun = item.run">
+                  <button
+                    type="button"
+                    class="flex w-full cursor-zoom-in justify-center gap-0.5 rounded bg-white"
+                    :title="`Review ${item.run}`"
+                    @click="review(item.run, item.set !== undefined ? `sheet-${item.set}-front` : undefined)"
+                  >
                     <template v-if="item.step === 'ref'">
                       <img v-for="view in SHEET_VIEWS.filter((v) => item.views?.[v])" :key="view" :src="file(item.views?.[view])" alt="" class="h-44 w-1/3 object-contain" loading="lazy" />
                     </template>
@@ -453,6 +493,9 @@ const running = (step: Tab): number =>
                     </UiBadge>
                     <span v-else class="text-slate-500" title="Added by hand">by hand</span>
                     <span class="flex-1" />
+                    <button type="button" class="text-slate-500 hover:text-slate-100" :title="`Open ${item.run}`" @click="openRun = item.run">
+                      Details
+                    </button>
                     <button
                       type="button"
                       class="text-slate-500 hover:text-rose-300"
@@ -479,5 +522,36 @@ const running = (step: Tab): number =>
         </template>
       </div>
     </main>
+
+    <Char3dLightbox
+      v-if="data && !detail"
+      :char-id="id"
+      :reference="data.character.ref"
+      :items="lightboxItems"
+      :current="lightbox?.key ?? null"
+      :heading="lightbox?.run"
+      @close="lightbox = null"
+      @navigate="(key: string) => lightbox && (lightbox = { run: lightbox.run, key })"
+    >
+      <template #actions="{ item }">
+        <!-- A sheet run's gallery entries are per sheet: only an item that belongs to one can add it. -->
+        <template v-if="lightbox && (byId.get(lightbox.run)?.step !== 'ref' || item.set !== undefined)">
+          <UiButton
+            v-if="inGallery(lightbox!.run, item.set)"
+            size="sm"
+            title="Remove from the gallery (the run is kept)"
+            @click="setGallery(false, lightbox!.run, item.set)"
+          >
+            In gallery ✓
+          </UiButton>
+          <UiButton v-else size="sm" title="Add to the gallery so the next step can use it" @click="setGallery(true, lightbox!.run, item.set)">
+            Add {{ item.set !== undefined ? `sheet ${item.set}` : '' }} to gallery
+          </UiButton>
+        </template>
+        <UiButton size="sm" variant="primary" title="Open the run: score it, see its config and timing" @click="reviewDetails(lightbox!.run)">
+          Score / details
+        </UiButton>
+      </template>
+    </Char3dLightbox>
   </div>
 </template>

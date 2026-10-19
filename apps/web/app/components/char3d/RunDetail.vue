@@ -21,6 +21,8 @@ import UiAlert from '../ui/Alert.vue';
 import UiBadge from '../ui/Badge.vue';
 import UiButton from '../ui/Button.vue';
 import UiCard from '../ui/Card.vue';
+import { char3dReviewItems } from '../../utils/char3dReview';
+import Char3dLightbox from './Char3dLightbox.vue';
 import ReviewForm from './ReviewForm.vue';
 
 const props = defineProps<{
@@ -106,11 +108,18 @@ const clipRenders = computed(() => Object.entries((renders.value?.['clips'] ?? {
 
 const showConfig = ref(false);
 const reviewing = ref(false);
+// Every image here opens the lightbox at itself, and the arrows walk the rest of the run.
+const lightboxItems = computed(() => char3dReviewItems(props.run));
+const lightboxKey = ref<string | null>(null);
+const review = (key?: string): void => {
+  lightboxKey.value = lightboxItems.value.find((item) => item.key === key)?.key ?? lightboxItems.value[0]?.key ?? null;
+};
 watch(
   () => props.run.id,
   () => {
     reviewing.value = false;
     showConfig.value = false;
+    lightboxKey.value = null;
   },
 );
 
@@ -274,17 +283,19 @@ watch(
               </UiButton>
             </template>
           </div>
-          <a :href="file(set.sheet)" target="_blank">
+          <button type="button" class="block w-full cursor-zoom-in" @click="review(`sheet-${set.index}`)">
             <img :src="file(set.sheet)" alt="" class="w-full rounded border border-white/10 bg-white" />
-          </a>
+          </button>
           <div v-if="set.views" class="flex gap-2">
-            <img
+            <button
               v-for="view in ['front', 'left', 'back'] as const"
               :key="view"
-              :src="file(set.views[view])"
-              :alt="view"
-              class="h-40 rounded bg-white object-contain"
-            />
+              type="button"
+              class="cursor-zoom-in"
+              @click="review(`sheet-${set.index}-${view}`)"
+            >
+              <img :src="file(set.views[view])" :alt="view" class="h-40 rounded bg-white object-contain" />
+            </button>
           </div>
         </div>
       </UiCard>
@@ -300,10 +311,16 @@ watch(
         <p class="text-sm font-medium capitalize">{{ entry.view }}</p>
         <div class="flex flex-wrap gap-2">
           <img :src="file(character.ref)" alt="" class="h-64 rounded border border-dashed border-white/20 bg-white object-contain opacity-70" title="Original reference" />
-          <a v-for="image in entry.images" :key="image.file" :href="file(image.file)" target="_blank" class="space-y-1 text-center">
+          <button
+            v-for="(image, index) in entry.images"
+            :key="image.file"
+            type="button"
+            class="cursor-zoom-in space-y-1 text-center"
+            @click="review(`${entry.view}-${index}`)"
+          >
             <img :src="file(image.file)" alt="" class="h-64 rounded border border-white/10 bg-white object-contain" />
             <span class="block text-xs text-slate-500">{{ image.file.split('/').pop() }} · seed {{ image.seed }}</span>
-          </a>
+          </button>
         </div>
         <details class="text-xs text-slate-400">
           <summary class="cursor-pointer">prompt</summary>
@@ -319,12 +336,15 @@ watch(
           <ModelViewer :src="file(outputs['glb'])" :bytes="outputs['bytes']" />
         </div>
         <div class="min-w-56 flex-1 space-y-2 text-sm">
+          <UiButton variant="primary" size="sm" title="Full screen: the mesh, then every close-up and render (← / →)" @click="review()">
+            Review full screen
+          </UiButton>
           <p class="font-medium" title="Background removed; Pixal3D is given the cut-out on black">Views Pixal3D was shown</p>
           <div class="flex flex-wrap gap-2">
-            <a v-for="view in meshViews" :key="view.view" :href="file(view.file)" target="_blank" class="text-center">
+            <button v-for="view in meshViews" :key="view.view" type="button" class="cursor-zoom-in text-center" @click="review(`view-${view.view}`)">
               <img :src="file(view.file)" alt="" class="size-24 rounded border border-white/10 bg-black object-contain" />
               <span class="text-xs text-slate-500">{{ view.view }}</span>
-            </a>
+            </button>
           </div>
           <p class="font-medium">Original reference</p>
           <img :src="file(character.ref)" alt="" class="h-40 rounded border border-white/10 bg-white object-contain" />
@@ -354,20 +374,30 @@ watch(
       </template>
       <template v-if="renders">
         <p class="text-sm font-medium">Turntable — texture</p>
-        <img :src="file(renders['sheet_tex'])" alt="" class="w-full rounded border border-white/10" />
+        <button type="button" class="block w-full cursor-zoom-in" @click="review('sheet_tex')">
+          <img :src="file(renders['sheet_tex'])" alt="" class="w-full rounded border border-white/10" />
+        </button>
         <p class="text-sm font-medium">Clay — geometry only</p>
-        <img :src="file(renders['sheet_clay'])" alt="" class="w-full rounded border border-white/10" />
+        <button type="button" class="block w-full cursor-zoom-in" @click="review('sheet_clay')">
+          <img :src="file(renders['sheet_clay'])" alt="" class="w-full rounded border border-white/10" />
+        </button>
         <template v-if="renders['sheet_detail']">
           <p class="text-sm font-medium">Detail — eyes and brows, hair tie, inside the sleeves</p>
-          <img :src="file(renders['sheet_detail'])" alt="" class="w-full rounded border border-white/10" />
+          <button type="button" class="block w-full cursor-zoom-in" @click="review(renders['detail']?.[0] ? `detail-${renders['detail'][0]}` : 'face_front')">
+            <img :src="file(renders['sheet_detail'])" alt="" class="w-full rounded border border-white/10" />
+          </button>
         </template>
         <div class="flex flex-wrap gap-4">
-          <div class="space-y-1"><p class="text-sm font-medium">Face</p><img :src="file(renders['face_front'])" alt="" class="h-56 rounded border border-white/10" /></div>
-          <div class="space-y-1"><p class="text-sm font-medium">Face 3/4</p><img :src="file(renders['face_34'])" alt="" class="h-56 rounded border border-white/10" /></div>
-          <div v-if="outputs['basecolor']" class="space-y-1">
+          <button type="button" class="cursor-zoom-in space-y-1 text-left" @click="review('face_front')">
+            <p class="text-sm font-medium">Face</p><img :src="file(renders['face_front'])" alt="" class="h-56 rounded border border-white/10" />
+          </button>
+          <button type="button" class="cursor-zoom-in space-y-1 text-left" @click="review('face_34')">
+            <p class="text-sm font-medium">Face 3/4</p><img :src="file(renders['face_34'])" alt="" class="h-56 rounded border border-white/10" />
+          </button>
+          <button v-if="outputs['basecolor']" type="button" class="cursor-zoom-in space-y-1 text-left" @click="review('basecolor')">
             <p class="text-sm font-medium">Base colour atlas</p>
             <img :src="file(outputs['basecolor'])" alt="" class="h-56 rounded border border-white/10 bg-black" />
-          </div>
+          </button>
         </div>
       </template>
     </section>
@@ -394,6 +424,9 @@ watch(
           </p>
         </div>
         <div class="min-w-56 flex-1 space-y-2 text-sm">
+          <UiButton variant="primary" size="sm" title="Full screen: the animated rig, the rest pose, then every clip and its frames (← / →)" @click="review()">
+            Review full screen
+          </UiButton>
           <p>{{ outputs['bones'] }} bones (mixamorig)</p>
           <template v-if="outputs['rigInfo']">
             <p class="text-xs text-slate-500">
@@ -437,7 +470,9 @@ watch(
       </template>
       <template v-if="renders">
         <p class="text-sm font-medium">Rest pose and skeleton</p>
-        <img :src="file(renders['rest_bones'])" alt="" class="max-h-96 rounded border border-white/10" />
+        <button type="button" class="cursor-zoom-in" @click="review('rest_bones')">
+          <img :src="file(renders['rest_bones'])" alt="" class="max-h-96 rounded border border-white/10" />
+        </button>
         <div v-for="[name, clip] in clipRenders" :key="name" class="space-y-1">
           <p class="text-sm font-medium">
             {{ String(name).replace(/_Armature$/, '') }} — frames {{ clip.range?.join('–') }}
@@ -458,9 +493,41 @@ watch(
               <template v-if="clip.handInBody.frames">(worst {{ (clip.handInBody.worstHandShare * 100).toFixed(0) }}% at frame {{ clip.handInBody.worstFrame }})</template>
             </span>
           </p>
-          <img :src="file(clip.sheet)" alt="" class="w-full rounded border border-white/10" />
+          <button type="button" class="block w-full cursor-zoom-in" @click="review(`clip-${name}`)">
+            <img :src="file(clip.sheet)" alt="" class="w-full rounded border border-white/10" />
+          </button>
         </div>
       </template>
     </section>
+
+    <Char3dLightbox
+      :char-id="charId"
+      :reference="character.ref"
+      :items="lightboxItems"
+      :current="lightboxKey"
+      :heading="run.id"
+      @close="lightboxKey = null"
+      @navigate="lightboxKey = $event"
+    >
+      <template #actions="{ item }">
+        <template v-if="run.status === 'done' && (run.step !== 'ref' || item.set !== undefined)">
+          <UiButton v-if="inGallery(item.set)" size="sm" title="Remove from the gallery (the run is kept)" @click="emit('gallery', false, item.set)">
+            In gallery ✓
+          </UiButton>
+          <UiButton v-else size="sm" title="Add to the gallery so the next step can use it" @click="emit('gallery', true, item.set)">
+            Add {{ item.set !== undefined ? `sheet ${item.set}` : '' }} to gallery
+          </UiButton>
+        </template>
+        <UiButton
+          v-if="run.status === 'done'"
+          size="sm"
+          variant="primary"
+          title="Close and score this run"
+          @click="lightboxKey = null; reviewing = true"
+        >
+          Score
+        </UiButton>
+      </template>
+    </Char3dLightbox>
   </div>
 </template>
