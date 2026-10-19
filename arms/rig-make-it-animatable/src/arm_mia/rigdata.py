@@ -113,6 +113,10 @@ def finalise(data: dict[str, Any]) -> dict[str, Any]:
     out = fold_fingers(data) if options.get("remove_fingers") else dict(data)
     vertices = np.asarray(out["mesh"].vertices)
     out["bw"] = weights.rigid_hands(out["bw"], vertices, out["joints"], out["bones_idx_dict"])
+    if options.get("rigid_sleeves"):
+        out["bw"] = weights.rigid_sleeves(
+            out["bw"], vertices, out["joints"], out["joints_tail"], out["bones_idx_dict"]
+        )
     pose = out.get("pose")
     out["targets"] = tpose_directions(pose, out["joints"], out["joints_tail"])
     out["options"] = json.dumps({**options, "prepared": True})

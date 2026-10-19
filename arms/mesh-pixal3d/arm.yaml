@@ -1,0 +1,50 @@
+id: mesh-pixal3d
+name: Pixal3D image-to-textured-mesh (pixel-aligned TRELLIS.2, single view)
+modality: mesh
+protocol: native
+lifecycle: resident
+capabilities:
+  - mesh.generate
+resources:
+  gpu: exclusive
+  # Low-VRAM mode: the flow models wait in system RAM (~23 GB) and only the
+  # stage that runs is on the card -- one 1.3B flow model, DINOv3 and the
+  # sparse decode, about 12 GB at 1024.
+  vramEstimateMb: 13000
+launch:
+  cwd: .
+  # Its own venv: TRELLIS.2's CUDA extensions (o_voxel, cumesh, flex_gemm,
+  # natten) are prebuilt for torch 2.10 + CUDA 13. See README.md.
+  command: ./.venv/Scripts/python.exe
+  args:
+    - "-m"
+    - "arm_pixal3d"
+    - "--host"
+    - "127.0.0.1"
+    - "--port"
+    - "{{port}}"
+    - "--model-dir"
+    - "{{modelDir}}"
+    - "--hf-home"
+    - "{{hfHome}}"
+    - "--torch-home"
+    - "{{torchHome}}"
+    - "--rembg-dir"
+    - "{{rembgDir}}"
+    - "--out-dir"
+    - "{{outputDir}}"
+    - "--input-dir"
+    - "{{inputDir}}"
+  env:
+    PYTHONPATH: ./src
+    PYTHONUNBUFFERED: "1"
+    ATTN_BACKEND: sdpa
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    HF_HUB_OFFLINE: "1"
+    HF_HUB_DISABLE_TELEMETRY: "1"
+    DO_NOT_TRACK: "1"
+health:
+  type: http
+  path: /healthz
+  timeoutMs: 60000
+params: ./params.schema.json

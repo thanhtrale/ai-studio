@@ -5,8 +5,9 @@ The vocabulary is the other mesh arms' -- `refImages`, `outPath`, `seed`,
 `textureSize`, `removeBackground`, `compressTextures`, `textureQuality` -- so
 the studio's route builds every body the same way. What is this arm's own is
 the paint stage's handful (`texture`, `paintViews`, `paintResolution`,
-`paintSteps`, `paintGuidance`, `upscale`) and `meshPath`, which paints a mesh
-that already exists instead of making one.
+`paintSteps`, `paintGuidance`, `upscale`), `meshPath`, which paints a mesh
+that already exists instead of making one, and `refViews`, which makes the
+shape from several views of the subject instead of one photo.
 """
 
 from __future__ import annotations
@@ -35,6 +36,10 @@ OCTREES = (128, 192, 256, 320, 384)
 VIEW_COUNTS = (6, 7, 8, 9)
 PAINT_RESOLUTIONS = (512, 768)
 TEXTURE_SIZES = (1024, 2048, 4096)
+#: Hunyuan3D-2mv's view slots. "left" is the subject turned 90 degrees clockwise
+#: seen from above -- it faces the left edge of the picture, so its right side
+#: shows; "right" is the mirror of that.
+VIEW_NAMES = ("front", "left", "back", "right")
 RANDOM_SEED_CEILING = 2**31 - 1
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 #: Tencent's pipeline puts the photograph's own viewpoint at +Z, which is where
@@ -68,10 +73,16 @@ class Job:
     paint_guidance: float = 3.0
     texture_size: int = 2048
     upscale: bool = True
+    #: paint the head from the front reference itself (see Engine._project_face)
+    project_face: bool = False
     compress_textures: bool = True
     texture_quality: int = 100
     #: A GLB to paint instead of a shape to make.
     mesh_path: Path | None = None
+    #: {view: image} for the multi-view shape model; `reference` is then the front.
+    views: dict[str, Path] = field(default_factory=dict)
+    #: a high-resolution close-up of the face, merged into the head projection
+    face_image: Path | None = None
 
 
 @dataclass
@@ -151,12 +162,32 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
     if out_path.suffix.lower() != ".glb":
         raise JobError("outPath must end in .glb")
 
+    views: dict[str, Path] = {}
+    raw_views = body.get("refViews")
+    if raw_views not in (None, {}):
+        if not isinstance(raw_views, dict):
+            raise JobError("refViews must be an object of view name to image path")
+        for name, entry in raw_views.items():
+            if name not in VIEW_NAMES:
+                raise JobError(f"refViews keys are {', '.join(VIEW_NAMES)}, not {name!r}")
+            if not isinstance(entry, str):
+                raise JobError(f"refViews.{name} must be a path")
+            path = _inside(in_dir, entry, f"refViews.{name}")
+            if not path.is_file():
+                raise JobError(f"refViews.{name} {entry} is not there")
+            views[name] = path
+        if "front" not in views or len(views) < 2:
+            raise JobError("refViews needs a front view and at least one other")
+
     raw_refs = body.get("refImages") or []
-    if not isinstance(raw_refs, list) or len(raw_refs) != 1 or not isinstance(raw_refs[0], str):
-        raise JobError("refImages must name exactly one image -- this arm is single-view")
-    reference = _inside(in_dir, raw_refs[0], "refImages")
-    if not reference.is_file():
-        raise JobError(f"reference image {raw_refs[0]} is not there")
+    if views and not raw_refs:
+        reference = views["front"]
+    else:
+        if not isinstance(raw_refs, list) or len(raw_refs) != 1 or not isinstance(raw_refs[0], str):
+            raise JobError("refImages must name exactly one image; several views go in refViews")
+        reference = _inside(in_dir, raw_refs[0], "refImages")
+        if not reference.is_file():
+            raise JobError(f"reference image {raw_refs[0]} is not there")
 
     mesh_path: Path | None = None
     raw_mesh = body.get("meshPath")
@@ -166,6 +197,15 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
         mesh_path = _inside(in_dir, raw_mesh, "meshPath")
         if mesh_path.suffix.lower() != ".glb" or not mesh_path.is_file():
             raise JobError(f"meshPath {raw_mesh} is not a GLB that exists")
+
+    face_image: Path | None = None
+    raw_face = body.get("faceImage")
+    if raw_face not in (None, ""):
+        if not isinstance(raw_face, str):
+            raise JobError("faceImage must be a path")
+        face_image = _inside(in_dir, raw_face, "faceImage")
+        if not face_image.is_file():
+            raise JobError(f"faceImage {raw_face} is not there")
 
     job = Job(
         out_path=out_path,
@@ -184,10 +224,17 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path) -> Job:
         paint_guidance=_float(body, "paintGuidance", 3.0, 1.0, 10.0),
         texture_size=_choice(body, "textureSize", 2048, TEXTURE_SIZES),
         upscale=_bool(body, "upscale", True),
+        project_face=_bool(body, "projectFace", False),
         compress_textures=_bool(body, "compressTextures", True),
         texture_quality=_int(body, "textureQuality", 100, 1, 100),
         mesh_path=mesh_path,
+        views=views,
+        face_image=face_image,
     )
+    if job.face_image is not None and not job.project_face:
+        raise JobError("faceImage is used by projectFace; set projectFace too")
+    if job.mesh_path is not None and job.views:
+        raise JobError("meshPath paints an existing mesh; refViews would be ignored")
     if job.mesh_path is not None and not job.texture:
         raise JobError("meshPath without texture would only copy the mesh")
     if job.mesh_path is not None and job.batch > 1:
@@ -269,6 +316,7 @@ LABELS = {
     "diffuse": "Paint views (albedo + MR)",
     "upscale": "Upscale views (Real-ESRGAN x4)",
     "bake": "Bake onto the UV map",
+    "face": "Project the front view onto the head",
     "inpaint": "Inpaint unseen texels",
     "write": "Write GLB",
 }
@@ -285,6 +333,8 @@ def generate(engine: Engine, job: Job, progress: JobProgress) -> GenerationRepor
         if job.mesh_path is not None
         else f"octree {job.octree} · ≤{job.target_faces:,} faces"
     )
+    if job.views:
+        detail += f" · {len(job.views)} views ({', '.join(job.views)})"
     if job.texture:
         detail += f" · {job.paint_views} views · {job.texture_size}px"
     if job.batch > 1:
@@ -297,6 +347,7 @@ def generate(engine: Engine, job: Job, progress: JobProgress) -> GenerationRepor
         photo = Image.open(job.reference)
         photo.load()
         cut: Image.Image | None = None
+        shape_input: Image.Image | dict[str, Image.Image] | None = None
 
         for index, (seed, target) in enumerate(zip(seeds, destinations, strict=True)):
             if job.batch > 1:
@@ -315,6 +366,23 @@ def generate(engine: Engine, job: Job, progress: JobProgress) -> GenerationRepor
                         cut = engine.cut_out(photo)
                 else:
                     cut = photo.convert("RGBA")
+                shape_input = cut
+                if job.views:
+                    shape_input = {}
+                    for name in VIEW_NAMES:
+                        if name not in job.views:
+                            continue
+                        if name == "front" and job.views[name] == job.reference:
+                            shape_input[name] = cut
+                            continue
+                        view = Image.open(job.views[name])
+                        view.load()
+                        if job.remove_background or view.mode != "RGBA":
+                            with progress.step(
+                                key(f"cutout-{name}"), f"Cut out the {name} view", parent="generate"
+                            ):
+                                view = engine.cut_out(view)
+                        shape_input[name] = view.convert("RGBA")
 
             if job.mesh_path is not None:
                 with progress.step(key("clean"), "Load mesh", job.mesh_path.name, parent="generate") as step:
@@ -333,7 +401,7 @@ def generate(engine: Engine, job: Job, progress: JobProgress) -> GenerationRepor
                     progress.advance(meter, done, total)
 
                 mesh = engine.make_shape(
-                    cut,
+                    shape_input,
                     ShapeParams(seed=seed, steps=job.steps, guidance=job.cfg_scale, octree=job.octree),
                     shape_step,
                 )
@@ -368,10 +436,12 @@ def generate(engine: Engine, job: Job, progress: JobProgress) -> GenerationRepor
                         guidance=job.paint_guidance,
                         texture_size=job.texture_size,
                         upscale=job.upscale,
+                        project_face=job.project_face,
                     ),
                     seed,
                     hook,
                     paint_step,
+                    face=Image.open(job.face_image) if job.face_image is not None else None,
                 )
                 with progress.step(key("write"), LABELS["write"], parent="generate"):
                     _write_textured(painted, target)

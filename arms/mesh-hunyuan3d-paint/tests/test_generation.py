@@ -67,3 +67,40 @@ def test_batch_names_and_seeds(roots: tuple[Path, Path]) -> None:
     job = parse_job(body(batch=3, seed=7), *roots)
     assert seeds_for(job) == [7, 8, 9]
     assert [path.name for path in paths_for(job)] == ["chair.glb", "chair-2.glb", "chair-3.glb"]
+
+
+def test_ref_views(roots: tuple[Path, Path]) -> None:
+    (roots[1] / "back.png").write_bytes(b"png")
+    job = parse_job(
+        {"outPath": "mesh/chair.glb", "refViews": {"front": "chair.png", "back": "back.png"}}, *roots
+    )
+    assert set(job.views) == {"front", "back"}
+    assert job.reference == job.views["front"]
+
+
+@pytest.mark.parametrize(
+    ("views", "message"),
+    [
+        ({"front": "chair.png"}, "at least one other"),
+        ({"back": "chair.png", "left": "chair.png"}, "front view"),
+        ({"front": "chair.png", "top": "chair.png"}, "keys are"),
+        ({"front": "chair.png", "back": "missing.png"}, "not there"),
+        ({"front": "chair.png", "back": "../x.png"}, "outside"),
+        (["chair.png"], "object"),
+    ],
+)
+def test_ref_views_rejects(roots: tuple[Path, Path], views: object, message: str) -> None:
+    with pytest.raises(JobError, match=message):
+        parse_job({"outPath": "mesh/chair.glb", "refViews": views}, *roots)
+
+
+def test_ref_views_not_with_mesh_path(roots: tuple[Path, Path]) -> None:
+    with pytest.raises(JobError, match="refViews"):
+        parse_job(body(meshPath="chair.glb", refViews={"front": "chair.png", "left": "chair.png"}), *roots)
+
+
+def test_face_image_needs_project_face(roots: tuple[Path, Path]) -> None:
+    with pytest.raises(JobError, match="projectFace"):
+        parse_job(body(faceImage="chair.png"), *roots)
+    job = parse_job(body(faceImage="chair.png", projectFace=True), *roots)
+    assert job.face_image == (roots[1] / "chair.png").resolve()

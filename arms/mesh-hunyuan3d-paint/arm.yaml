@@ -1,5 +1,5 @@
 id: mesh-hunyuan3d-paint
-name: Hunyuan3D 2.1 image-to-textured-mesh (shape + PBR paint)
+name: Hunyuan3D 2.1 image-to-textured-mesh, single or multi-view (shape + PBR paint)
 modality: mesh
 protocol: native
 lifecycle: resident
@@ -25,6 +25,8 @@ launch:
     - "{{port}}"
     - "--shape-dir"
     - "{{shapeDir}}"
+    - "--mv-shape-dir"
+    - "{{mvShapeDir}}"
     - "--paint-dir"
     - "{{paintDir}}"
     - "--dino-dir"

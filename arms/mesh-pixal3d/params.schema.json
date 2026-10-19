@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pixal3D start parameters",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "modelDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "The TencentARC/Pixal3D snapshot: pipeline.json and ckpts/ (single-view flow models and decoders).",
+      "default": "models/pixal3d/Pixal3D"
+    },
+    "hfHome": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Hugging Face cache holding DINOv3 ViT-L (camenduru/dinov3-vitl16-pretrain-lvd1689m) and MoGe-2 (Ruicheng/moge-2-vitl).",
+      "default": "models/pixal3d/hf"
+    },
+    "torchHome": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "torch.hub cache holding the NAF feature upsampler (valeoai/NAF code + weights).",
+      "default": "models/pixal3d/torch"
+    },
+    "rembgDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Where rembg keeps its ONNX cut-out models (birefnet-general), shared with the Hunyuan arm.",
+      "default": "models/rembg"
+    },
+    "outputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that every job output path is confined to.",
+      "default": "outputs"
+    },
+    "inputDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "Root that a job's reference image is confined to.",
+      "default": "inputs"
+    }
+  }
+}

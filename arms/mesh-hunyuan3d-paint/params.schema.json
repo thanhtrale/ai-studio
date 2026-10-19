@@ -10,6 +10,12 @@
       "description": "tencent/Hunyuan3D-2.1's hunyuan3d-dit-v2-1 folder: config.yaml and model.fp16.ckpt, which holds the DiT, the shape VAE and DINOv2-L.",
       "default": "models/hunyuan3d-2.1-official/hunyuan3d-dit-v2-1"
     },
+    "mvShapeDir": {
+      "type": "string",
+      "format": "aistudio-path",
+      "description": "tencent/Hunyuan3D-2mv's hunyuan3d-dit-v2-mv folder (config.yaml + model.fp16.safetensors). Used instead of shapeDir when a job names refViews: the shape is conditioned on up to four views (front, left, back, right) rather than one photo. Paint still works from the front view.",
+      "default": "models/hunyuan3d-2mv/hunyuan3d-dit-v2-mv"
+    },
     "paintDir": {
       "type": "string",
       "format": "aistudio-path",
@@ -36,7 +42,12 @@
     },
     "rembgModel": {
       "type": "string",
-      "enum": ["birefnet-general", "birefnet-general-lite", "u2net", "isnet-general-use"],
+      "enum": [
+        "birefnet-general",
+        "birefnet-general-lite",
+        "u2net",
+        "isnet-general-use"
+      ],
       "description": "The cut-out model. birefnet-general is the same network the ComfyUI mesh arms use.",
       "default": "birefnet-general"
     },

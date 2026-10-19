@@ -67,9 +67,11 @@ class ArmState:
 
         try:
             self.progress.begin(job_id)
-            if job.mesh_path is None and not self.engine.shape_loaded:
-                with self.progress.step("load-shape", "Load shape model", "hunyuan3d-dit-v2-1 · fp16"):
-                    self.engine.load_shape()
+            kind = "mv" if job.views else "single"
+            if job.mesh_path is None and not (self.engine.shape_loaded and self.engine.shape_kind == kind):
+                label = "hunyuan3d-dit-v2-mv · fp16" if kind == "mv" else "hunyuan3d-dit-v2-1 · fp16"
+                with self.progress.step("load-shape", "Load shape model", label):
+                    self.engine.load_shape(kind)
             if job.texture and not self.engine.paint_loaded:
                 with self.progress.step(
                     "load-paint", "Load paint models", "paintpbr-v2-1 · DINOv2-giant · Real-ESRGAN"

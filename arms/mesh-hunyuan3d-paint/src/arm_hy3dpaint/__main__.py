@@ -20,6 +20,9 @@ def main() -> None:
     parser.add_argument(
         "--shape-dir", required=True, help="hunyuan3d-dit-v2-1 (config.yaml + model.fp16.ckpt)"
     )
+    parser.add_argument(
+        "--mv-shape-dir", default=None, help="hunyuan3d-dit-v2-mv (config.yaml + model.fp16.safetensors)"
+    )
     parser.add_argument("--paint-dir", required=True, help="hunyuan3d-paintpbr-v2-1, a diffusers folder")
     parser.add_argument("--dino-dir", required=True, help="facebook/dinov2-giant")
     parser.add_argument("--upscaler", required=True, help="RealESRGAN_x4plus.pth")
@@ -49,12 +52,16 @@ def main() -> None:
         upscaler=Path(args.upscaler).resolve(),
         rembg_home=rembg_dir,
         rembg_model=args.rembg_model,
+        mv_shape_dir=Path(args.mv_shape_dir).resolve() if args.mv_shape_dir else None,
     )
     for name, path in (
         ("shape-dir", paths.shape_dir),
         ("paint-dir", paths.paint_dir),
         ("dino-dir", paths.dino_dir),
+        ("mv-shape-dir", paths.mv_shape_dir),
     ):
+        if path is None:
+            continue
         if not path.is_dir():
             print(f"[arm] warning: --{name} {path} is not there; jobs that need it will fail", flush=True)
 

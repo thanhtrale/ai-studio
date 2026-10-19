@@ -62,6 +62,12 @@ class Job:
     clips: list[str]
     remove_fingers: bool = True
     inplace: bool = True
+    #: Bind in the pose the mesh is in instead of the predicted T-pose. For a mesh built in a T-pose
+    #: already: the pose network misreads wide hanging sleeves as lowered arms, and its "correction"
+    #: tore them into shards.
+    keep_pose: bool = False
+    #: Everything out past a shoulder follows the arm (`weights.rigid_sleeves`): for robes in a T-pose.
+    rigid_sleeves: bool = False
     compress_textures: bool = True
     texture_quality: int = 100
     mode: str = "rig"
@@ -188,6 +194,8 @@ def parse_job(body: dict[str, Any], out_dir: Path, in_dir: Path, clip_dir: Path)
         clips=_clips(body, clip_dir) if mode != "draft" else [],
         remove_fingers=_bool(body, "removeFingers", True),
         inplace=_bool(body, "inPlace", True),
+        keep_pose=_bool(body, "keepPose", False),
+        rigid_sleeves=_bool(body, "rigidSleeves", False),
         compress_textures=_bool(body, "compressTextures", True),
         texture_quality=int(quality),
         mode=mode,
@@ -247,7 +255,12 @@ def _predict(engine: Engine, job: Job, progress: JobProgress, scratch: Path) -> 
         step.detail(f"{converted} WebP map{'' if converted == 1 else 's'} → PNG" if converted else "PNG maps")
 
     with progress.step("predict", "Predict joints, weights, T-pose", parent="rig") as step:
-        data = rigdata.finalise(engine.predict(mesh, job.remove_fingers, job.inplace))
+        predicted = engine.predict(mesh, job.remove_fingers, job.inplace)
+        if job.keep_pose:
+            predicted["pose"] = None
+        if job.rigid_sleeves:
+            predicted["options"] = json.dumps({**json.loads(predicted["options"]), "rigid_sleeves": True})
+        data = rigdata.finalise(predicted)
         step.detail(f"{len(data['mesh'].vertices):,} vertices · {len(data['bones_idx_dict'])} bones")
     return data
 

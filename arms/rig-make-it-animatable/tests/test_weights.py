@@ -84,3 +84,25 @@ def test_weight_on_a_bone_across_the_body_is_taken_away():
     # Head and spine meet at the neck: a vertex near both keeps both.
     assert out[2, 1] > 0
     assert np.allclose(out.sum(axis=1), 1)
+
+
+def test_a_hanging_sleeve_goes_over_to_the_arm_and_the_body_and_back_hair_stay():
+    bones = {"mixamorig:Hips": 0, "mixamorig:Spine": 1, "mixamorig:LeftArm": 2, "mixamorig:LeftForeArm": 3}
+    joints = np.array([[0.0, 1.0, 0.0], [0.0, 1.2, 0.0], [0.2, 1.5, 0.0], [0.45, 1.5, 0.0]])
+    tails = np.array([[0.0, 1.2, 0.0], [0.0, 1.5, 0.0], [0.45, 1.5, 0.0], [0.7, 1.5, 0.0]])
+    vertices = np.array(
+        [
+            [0.4, 1.15, 0.0],  # sleeve hanging beside the waist
+            [0.05, 1.3, 0.0],  # chest
+            [0.4, 1.3, -0.4],  # hair far down the back
+            [0.4, 0.5, 0.0],  # robe hem below the hips
+            [0.0, 0.0, 0.0],  # feet, for the height
+        ]
+    )
+    bw = np.array(
+        [[0.2, 0.6, 0.1, 0.1], [0.1, 0.9, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0, 0, 0], [1.0, 0, 0, 0]]
+    )
+    out = weights.rigid_sleeves(bw, vertices, joints, tails, bones)
+    assert out[0, :2].sum() == pytest.approx(0.0)  # nothing left on the hips and spine
+    assert out[0, 2] == pytest.approx(0.9)  # the hips' and spine's share went to the nearest arm bone
+    np.testing.assert_allclose(out[1:], bw[1:])

@@ -149,3 +149,59 @@ def rigid_hands(
         weights *= 1.0 - share[:, None]
         weights[:, bone["Hand"]] += share
     return _normalised(weights).astype(np.asarray(bw).dtype)
+
+
+#: Sleeves: where, beyond the shoulder joint, a vertex starts and ends going over to the arm, as shares of
+#: the character's height. The start leaves hair hanging close beside the shoulders to the body.
+SLEEVE_START = 0.02
+SLEEVE_FULL = 0.07
+#: How far in front of or behind the shoulder a sleeve reaches; hair down the back is further.
+SLEEVE_DEPTH = 0.12
+
+
+def rigid_sleeves(
+    bw: np.ndarray,
+    vertices: np.ndarray,
+    joints: np.ndarray,
+    tails: np.ndarray,
+    bones_idx_dict: dict[str, int],
+) -> np.ndarray:
+    """In a T-pose, everything out past a shoulder and above the hips is that arm's.
+
+    A wide sleeve hangs from the arm down beside the waist, and the network
+    weights its lower half to the spine it is near. Once the arm comes down
+    the sleeve is pulled two ways and tears into shards. Moved over to the
+    nearest bone of the arm's chain, it swings with the arm instead (and may
+    pass through the body, which a game hides far better than a tear).
+    """
+    weights = np.asarray(bw, dtype=np.float64).copy()
+    vertices = np.asarray(vertices, dtype=np.float64)
+    height = float(np.ptp(vertices[:, 1])) or 1.0
+    hips = bones_idx_dict.get("mixamorig:Hips")
+    if hips is None:
+        return np.asarray(bw)
+    distance = bone_distances(vertices, joints, tails)
+    for side in ("Left", "Right"):
+        chain = [
+            bones_idx_dict.get(f"mixamorig:{side}{part}") for part in ("Shoulder", "Arm", "ForeArm", "Hand")
+        ]
+        chain = [index for index in chain if index is not None]
+        arm = bones_idx_dict.get(f"mixamorig:{side}Arm")
+        if arm is None:
+            continue
+        shoulder = joints[arm]
+        outward = np.sign(shoulder[0] - joints[hips][0]) or 1.0
+        lateral = (vertices[:, 0] - shoulder[0]) * outward
+        share = np.clip((lateral - SLEEVE_START * height) / ((SLEEVE_FULL - SLEEVE_START) * height), 0.0, 1.0)
+        share *= (vertices[:, 1] > joints[hips][1]) & (
+            np.abs(vertices[:, 2] - shoulder[2]) < SLEEVE_DEPTH * height
+        )
+        if not share.any():
+            continue
+        nearest = np.asarray(chain)[distance[:, chain].argmin(axis=1)]
+        off_chain = np.ones(weights.shape[1], dtype=bool)
+        off_chain[chain] = False
+        moved = weights[:, off_chain].sum(axis=1) * share
+        weights[:, off_chain] *= (1.0 - share)[:, None]
+        weights[np.arange(len(weights)), nearest] += moved
+    return _normalised(weights).astype(np.asarray(bw).dtype)

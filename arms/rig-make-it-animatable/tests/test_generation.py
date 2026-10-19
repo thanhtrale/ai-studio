@@ -28,6 +28,9 @@ def body(**extra: object) -> dict:
 def test_defaults(roots: tuple[Path, Path, Path]) -> None:
     job = parse_job(body(), *roots)
     assert job.clips == [] and job.remove_fingers and job.inplace and job.compress_textures
+    assert not job.keep_pose and not job.rigid_sleeves
+    assert parse_job(body(keepPose=True), *roots).keep_pose
+    assert parse_job(body(rigidSleeves=True), *roots).rigid_sleeves
 
 
 def test_clips_mix_builtin_and_files(roots: tuple[Path, Path, Path]) -> None:
@@ -49,6 +52,7 @@ def test_clips_mix_builtin_and_files(roots: tuple[Path, Path, Path]) -> None:
         ({"clips": ["Moonwalk"]}, "neither"),
         ({"clips": ["../../etc"]}, "not a clip name"),
         ({"removeFingers": "yes"}, "removeFingers"),
+        ({"keepPose": 1}, "keepPose"),
         ({"textureQuality": 0}, "textureQuality"),
     ],
 )

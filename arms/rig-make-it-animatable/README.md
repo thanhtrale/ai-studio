@@ -151,6 +151,8 @@ rigid before it is written (`rigdata.finalise`), not afterwards.
 | `clips` | [] | built-in names and Mixamo file names, up to 16 |
 | `removeFingers` | true | fold the 30 finger bones into the hands: 22 bones left |
 | `inPlace` | true | locomotion stays on the spot |
+| `keepPose` | false | bind in the pose the mesh is in, skipping the predicted T-pose reset: for a mesh built in a T-pose, whose wide hanging sleeves the pose network misreads as lowered arms |
+| `rigidSleeves` | false | everything out past a shoulder and above the hips follows the arm, so a wide sleeve weighted half to the spine does not tear when the arm comes down: for robes in a T-pose |
 | `compressTextures`, `textureQuality` | true, 100 | WebP after Blender |
 
 ## Measured
