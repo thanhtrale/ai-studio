@@ -179,6 +179,8 @@ export interface Char3dClip {
   name: string;
   description?: string;
   tags: string[];
+  /** The clip's primary group (cliplib.py `category_of`): weapon, combat, dance, locomotion... or other. */
+  category?: string;
   durS?: number;
   frames?: number;
   thumb?: boolean;

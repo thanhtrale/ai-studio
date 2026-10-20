@@ -113,6 +113,35 @@ def test_split_render_and_reproject(roots: Roots) -> None:
     assert list(reproject.payload["views"]) == ["front"]
 
 
+def test_hairfix(roots: Roots) -> None:
+    job = parse_job(
+        {
+            "task": "hairfix",
+            "glb": "c/r01/mesh.glb",
+            "outPath": "c/r01/fused.glb",
+            "options": {"dilate": 0.009},
+        },
+        "tools",
+        roots,
+    )
+    assert job.script == "hairfix.py"
+    assert job.payload["out"].endswith("fused.glb")
+    assert job.payload["dilate"] == 0.009
+    with pytest.raises(JobError, match="unknown option"):
+        body = {"task": "hairfix", "glb": "c/r01/mesh.glb", "outPath": "c/r01/f.glb", "options": {"x": 1}}
+        parse_job(body, "tools", roots)
+
+
+def test_facefix(roots: Roots) -> None:
+    job = parse_job(
+        {"task": "facefix", "glb": "c/r01/mesh.glb", "outPath": "c/r01/face.glb", "options": {"ears": 0.6}},
+        "tools",
+        roots,
+    )
+    assert job.script == "facefix.py"
+    assert job.payload["ears"] == 0.6
+
+
 def test_a_render_mode_is_one_of_two(roots: Roots) -> None:
     with pytest.raises(JobError, match="mode must be one of"):
         parse_job({"task": "render", "glb": "c/r01/mesh.glb", "outDir": "r", "mode": "movie"}, "tools", roots)

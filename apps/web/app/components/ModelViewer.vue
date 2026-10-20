@@ -89,7 +89,9 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
   const renderer = new three.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = three.SRGBColorSpace;
-  renderer.toneMapping = three.ACESFilmicToneMapping;
+  // Neutral rather than ACES: ACES washes the hue out of light colours (a pastel character's pinks went
+  // chalk-white, chibi-martial-girl r05), and Neutral was made to keep a material's colour as authored.
+  renderer.toneMapping = three.NeutralToneMapping;
   container.appendChild(renderer.domElement);
   renderer.domElement.style.display = 'block';
 
@@ -101,8 +103,9 @@ async function createViewer(container: HTMLDivElement): Promise<NonNullable<type
   const pmrem = new three.PMREMGenerator(renderer);
   const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environment = environment;
+  scene.environmentIntensity = 0.8;
 
-  const key = new three.DirectionalLight(0xffffff, 1.2);
+  const key = new three.DirectionalLight(0xffffff, 1.0);
   key.position.set(3, 5, 4);
   scene.add(key, new three.HemisphereLight(0xffffff, 0x222233, 0.4));
 

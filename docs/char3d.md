@@ -104,7 +104,9 @@ four steps follow `<image1>` more closely than the prompt.
   reference's own pose); the templates are in `server/char3d/prompts.ts`.
 - The default is `mode: "sheet"`: `SHEET_PROMPT` filled with the character's
   `subject` and `traits` (+ the run's `extra`, e.g. "remove the long hanging
-  ribbon tails"), 2048×1024, batch 4, then split → `outputs.sets[]` (three
+  ribbon tails"), 2048×1024, ONE sheet per run (the server forces
+  `batch: 1`; more sheets are more runs, each reviewed as soon as it is
+  drawn), then split → `outputs.sets[]` (three
   views and `check`). A run with its own `prompts`, or `mode: "views"`, runs
   the old way, one image per view (896×1152, batch ≥ 2). r70: 70 s to
   generate + 0.5 s to split, width 0.4%, height 0.8%.
@@ -227,6 +229,88 @@ it off.
   the right pastel pink, a pink hairpin. Left: a grey patch in the hair behind
   the cheek (3/4), speckles in hidden hair, an extra hairpin from the shape.
   The person, 2026-10-18: "the face is good".
+- `predFrom` reuses the old run's MESH as well as its prediction: on a mesh
+  with other vertices (after `hairFix`, a new shape) it is simply the old rig
+  again (chibi-martial-girl r15). Rig such a mesh fresh.
+
+### Jagged hair starts in the ref (chibi-martial-girl r20–r22)
+
+Fix the sheet before reaching for `hairFix`. The r03 sheet drew the hair with
+flyaway wisps, a ponytail splitting into strands at the tip, thin side locks
+down to the chest — and the ponytail in a different place per view (on the
+left shoulder in front, centred in the back: the traits said "on the LEFT
+side"). Pixal3D turns each wisp into a card and has to reconcile the views:
+shredded, jagged hair. Traits asking for "a few smooth solid hair masses, no
+flyaway strands", ONE thick tapered ponytail "down the CENTER of the back ...
+in every view", chin-length solid side locks (r20, extra: "simple and solid
+like a 3D game model") gave a mesh with one smooth ponytail straight from
+Pixal3D (r21, IoU 0.93–0.95) and a clean rig (r22, 84). Cost: a simpler hair
+silhouette than the original drawing, the hairpin's tassel lost.
+
+### A flowing ponytail that meshes (chibi-martial-girl r23–r44)
+
+The person wanted the original's full, wavy ponytail, not r20's stiff
+paddle. Many thin strands in the drawing give many thin strands in 3D with
+every model: Pixal3D cards (r27), `hairFix` wax (r27 fused), Hunyuan3D-2mv
+spaghetti tubes. What worked: traits asking for hair "SCULPTED like a PVC
+anime figure (Nendoroid style)", a ponytail of 4–5 large wavy locks "no wider
+than the head" (front/back widths agree), a smooth crown, bangs that stop above
+the brows with the face clear, ONE hairpin above the left ear (r28 → r40).
+With the default remesh 768 the big hair took the grid and 11 seeds of r28
+gave pinched faces and doubled hairpins (r29–r42); `remeshResolution: 1024,
+targetFaces: 400000` gave the first mesh with both the flowing ponytail and a
+good face (r43, 78) and a clean rig (r44, 82).
+
+### A mouse face (`faceFix`, chibi-martial-girl r45–r46)
+
+Pixal3D builds a chibi face with a muzzle: along the centre line the face is
+flat, but across it the mouth and chin rows fall back fast (r43: 0.037·H
+behind the centre at 0.08·H off it) while the eye row stays flat — a wedge;
+with big round ears out to the sides, "it looks like a mouse" (the person).
+`faceFix: true` on a mesh run (`facefix.py`, after the re-projection; the mesh
+before it is kept as `mesh_preface.glb`) gives each lower-face row the eye
+row's horizontal curve, anchored at its own sides, so only the centre moves
+back (depth only — the front silhouette and the painted eyes stay), and scales
+the skin reaching past |x| = 0.105·H (the ears) to 0.65 toward that plane.
+Colour alone cannot find the face (the white robe and pink hairpin pass a skin
+test, nose and mouth shading fails it): the chin is the neck crease of the
+centre-line depth profile, the eye row is 0.13·H above it. r43 → r45: wedge
+0.017·H → 0.003·H.
+
+### Fusing the hair (`hairFix`, chibi-martial-girl r12–r17)
+
+Off by default; the mesh form's "Fuse hair", or `hairFix: true | {options}`
+on a mesh run. After the re-projection, the tools arm runs `hairfix.py`
+(Blender, ~3 s); the mesh before it is kept as `mesh_prehair.glb`.
+
+- Why: Pixal3D builds long hair as dozens of thin, separate cards. The sheet's
+  back view is one smooth ponytail; the mesh is a bundle of shredded strips
+  with jagged edges and see-through gaps. Remesh 1024 (r07) does not help:
+  the cards stay cards.
+- How: hair = large connected dark, low-chroma atlas regions (welded by
+  position, since glTF splits vertices on UV seams). A morphological closing
+  of those faces — solidify ±0.009·H, voxel remesh 0.004·H, drop crumbs,
+  shrink 0.006·H along the normals, smooth — fuses neighbouring cards into
+  solid locks. The cards' own colour (strands, sheen) is baked onto the
+  locks' new UVs (Cycles, selected → active), and every image of the body
+  material is doubled in width: body on the left, hair on the right — ONE
+  material. With two (r13: a flat "Hair" material) the rig's trimesh load
+  packs them into a new atlas with new UVs, the normal map put back after the
+  bind no longer fits, and a lit viewer shows grey blotches over the robe and
+  face (r17). Flat hair also lost every strand ("bệt").
+- Workbench check renders do not show normal maps: r17 passed on them and
+  was smeared in the viewer. Check a lit render after a material change.
+- The fringe keeps its strands (above chin, in front, within ±0.30 of the hair
+  width): closing it curtains the eyes. A wider fringe zone (r12) left a cut
+  across the cheeks on the side locks.
+- 0.012/0.008 melts the hair like candle wax. Solidify with even offset shoots
+  degenerate faces out into long blades: it is off, and degenerates are
+  dissolved first.
+- `prep.py`'s hair cut reads a flat material's own colour (kept as a fallback):
+  sampling the atlas at the flat hair's empty UVs found 232 hanging-hair faces instead of ~40K, MIA saw the
+  long hair, put the shoulders at neck height, and a side lock swung with the
+  arm (r14/r16). Fixed: r17, shoulders right, r06-level stretch. r18/r19:
+  baked strands, one material, clean lit surface (r19 passed at 84).
 
 ### Alternative mesh: Hunyuan3D-2.1 shape + paint (r67–r84)
 

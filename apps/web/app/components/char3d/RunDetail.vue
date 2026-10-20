@@ -85,6 +85,61 @@ const sourceRefs = computed(() => {
 });
 
 /**
+ * Where this run came from, oldest first: the reference run (and which of its
+ * sheets), then the mesh run, then this one. Read from what the run was fed --
+ * a rig's `config.mesh`, a mesh's `config.views` -- not only from `parent`,
+ * because those paths are what actually went into the arm.
+ */
+interface LineageStep {
+  run: Char3dRun | undefined;
+  id: string;
+  step: Char3dStep;
+  detail?: string;
+  thumb: string;
+  current?: boolean;
+}
+const runOfPath = (rel: unknown): string => String(rel ?? '').split('/')[1] ?? '';
+const byRunId = (id: string): Char3dRun | undefined => props.runs.find((candidate) => candidate.id === id);
+function turntableThumb(run?: Char3dRun): string {
+  const files = run?.outputs?.['renders']?.files ?? {};
+  return file((files['tex'] as string[] | undefined)?.[1] ?? files['face_front']);
+}
+function refStep(meshRun: Char3dRun | undefined): LineageStep | null {
+  const views = (meshRun?.config['views'] ?? {}) as Record<string, string>;
+  const id = runOfPath(views['front']) || (meshRun?.parent ?? '');
+  if (!id) return null;
+  const run = byRunId(id);
+  const set = ((run?.outputs?.['sets'] ?? []) as Char3dSheetSet[]).find((entry) => entry.views?.front === views['front']);
+  return {
+    run,
+    id,
+    step: 'ref',
+    ...(set ? { detail: `sheet ${set.index}` } : {}),
+    thumb: file(views['front'] ?? set?.views?.front),
+  };
+}
+const lineage = computed<LineageStep[]>(() => {
+  const run = props.run;
+  if (run.step === 'ref') return [];
+  const self: LineageStep = { run, id: run.id, step: run.step, thumb: '', current: true };
+  if (run.step === 'mesh') {
+    const source = config.value['retexture'] ? byRunId(String(config.value['retexture'])) : undefined;
+    const ref = refStep(source ?? run);
+    const steps: LineageStep[] = ref ? [ref] : [];
+    if (source) steps.push({ run: source, id: source.id, step: 'mesh', detail: 'geometry (retexture)', thumb: turntableThumb(source) });
+    return [...steps, { ...self, thumb: turntableThumb(run) }];
+  }
+  const meshId = runOfPath(config.value['mesh']) || (run.parent ?? '');
+  const mesh = byRunId(meshId);
+  const ref = refStep(mesh);
+  return [
+    ...(ref ? [ref] : []),
+    ...(meshId ? [{ run: mesh, id: meshId, step: 'mesh' as const, thumb: turntableThumb(mesh) }] : []),
+    { ...self, thumb: turntableThumb(mesh) },
+  ];
+});
+
+/**
  * The largest per-frame jump of the torso-clearance correction, over every
  * clip and both arms. A few degrees is the correction easing in; tens of
  * degrees is an arm twisting round in a frame or two.
@@ -108,6 +163,9 @@ const clipRenders = computed(() => Object.entries((renders.value?.['clips'] ?? {
 
 const showConfig = ref(false);
 const reviewing = ref(false);
+// What the run made and what its reviewer made of it are kept on separate panes:
+// the outputs are looked at first, on their own, and the verdict is read apart.
+const pane = ref<'output' | 'review'>('output');
 // Every image here opens the lightbox at itself, and the arrows walk the rest of the run.
 const lightboxItems = computed(() => char3dReviewItems(props.run));
 const lightboxKey = ref<string | null>(null);
@@ -120,6 +178,7 @@ watch(
     reviewing.value = false;
     showConfig.value = false;
     lightboxKey.value = null;
+    pane.value = 'output';
   },
 );
 
@@ -172,13 +231,19 @@ watch(
       <template v-if="run.step === 'rig' && run.status === 'done'">
         <NuxtLink
           v-if="savedForReview"
-          :to="`/char3d/review?c=${charId}-${run.id}`"
+          :to="`/char3d/gallery?c=${charId}-${run.id}`"
           class="text-sm text-indigo-300 hover:text-indigo-200"
         >
-          In animation review →
+          In 3D gallery →
         </NuxtLink>
-        <UiButton v-else size="sm" title="Save this rig to the animation review list" @click="emit('saveForReview')">
-          Save for review
+        <UiButton
+          v-else
+          size="sm"
+          :variant="run.review?.verdict === 'pass' ? 'primary' : 'secondary'"
+          title="Add this rigged character to the 3D gallery, where it plays the Mixamo clip library"
+          @click="emit('saveForReview')"
+        >
+          Add to 3D gallery
         </UiButton>
       </template>
       <UiButton size="sm" variant="ghost" title="Refresh" @click="emit('refresh')">Refresh</UiButton>
@@ -208,7 +273,50 @@ watch(
       </div>
     </UiCard>
 
+    <!-- lineage: which reference sheet and which mesh this run was made from -->
+    <div v-if="lineage.length" class="flex flex-wrap items-center gap-2 rounded border border-white/10 bg-white/5 p-2">
+      <span class="text-xs text-slate-400">Nguồn gốc</span>
+      <template v-for="(entry, index) in lineage" :key="`${entry.step}-${entry.id}`">
+        <span v-if="index" class="text-slate-500">→</span>
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded border px-2 py-1 text-left"
+          :class="entry.current ? 'border-indigo-400/60 bg-indigo-500/10' : 'border-white/10 hover:border-white/30'"
+          :disabled="entry.current"
+          :title="entry.current ? 'This run' : `Open ${entry.id}`"
+          @click="emit('open', entry.id)"
+        >
+          <img v-if="entry.thumb" :src="entry.thumb" alt="" class="h-12 w-10 rounded bg-white object-contain" />
+          <span class="text-xs">
+            <span class="block text-slate-400">{{ STEP_LABEL[entry.step] }}<template v-if="entry.detail"> · {{ entry.detail }}</template></span>
+            <b class="font-mono text-slate-100">{{ entry.id }}</b>
+            <span v-if="!entry.run" class="ml-1 text-rose-300">missing</span>
+          </span>
+          <UiBadge v-if="entry.run?.review" :tone="VERDICT_TONE[entry.run.review.verdict]">{{ entry.run.review.score }}</UiBadge>
+        </button>
+      </template>
+    </div>
+
+    <nav class="flex gap-1 border-b border-white/10">
+      <button
+        v-for="entry in (['output', 'review'] as const)"
+        :key="entry"
+        type="button"
+        class="-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm"
+        :class="pane === entry ? 'border-indigo-400 text-slate-100' : 'border-transparent text-slate-400 hover:text-slate-100'"
+        @click="pane = entry"
+      >
+        {{ entry === 'output' ? 'Kết quả' : 'Review' }}
+        <UiBadge v-if="entry === 'review' && run.review" :tone="VERDICT_TONE[run.review.verdict]">
+          {{ run.review.score }} · {{ run.review.verdict }}
+        </UiBadge>
+        <span v-else-if="entry === 'review' && run.status === 'done'" class="text-xs text-amber-300">chưa review</span>
+      </button>
+    </nav>
+
     <!-- review -->
+    <template v-if="pane === 'review'">
+    <p v-if="run.status !== 'done' && !run.review" class="text-sm text-slate-500">The run has not finished; there is nothing to review yet.</p>
     <UiCard v-if="run.review && !reviewing">
       <div class="space-y-3 p-4">
         <div class="flex flex-wrap items-center gap-3">
@@ -259,6 +367,9 @@ watch(
         <ReviewForm :char-id="charId" :run-id="run.id" :review="run.review" @saved="reviewing = false; emit('refresh')" />
       </div>
     </UiCard>
+    </template>
+
+    <template v-if="pane === 'output'">
 
     <!-- ref: sheets -->
     <section v-if="run.step === 'ref' && sheetSets.length" class="space-y-4">
@@ -499,6 +610,7 @@ watch(
         </div>
       </template>
     </section>
+    </template>
 
     <Char3dLightbox
       :char-id="charId"
@@ -508,26 +620,6 @@ watch(
       :heading="run.id"
       @close="lightboxKey = null"
       @navigate="lightboxKey = $event"
-    >
-      <template #actions="{ item }">
-        <template v-if="run.status === 'done' && (run.step !== 'ref' || item.set !== undefined)">
-          <UiButton v-if="inGallery(item.set)" size="sm" title="Remove from the gallery (the run is kept)" @click="emit('gallery', false, item.set)">
-            In gallery ✓
-          </UiButton>
-          <UiButton v-else size="sm" title="Add to the gallery so the next step can use it" @click="emit('gallery', true, item.set)">
-            Add {{ item.set !== undefined ? `sheet ${item.set}` : '' }} to gallery
-          </UiButton>
-        </template>
-        <UiButton
-          v-if="run.status === 'done'"
-          size="sm"
-          variant="primary"
-          title="Close and score this run"
-          @click="lightboxKey = null; reviewing = true"
-        >
-          Score
-        </UiButton>
-      </template>
-    </Char3dLightbox>
+    />
   </div>
 </template>

@@ -55,18 +55,8 @@ const FUNCTIONS: StudioFunction[] = [
     glyph: '▣',
   },
   {
-    key: 'model',
-    title: '3D model generation',
-    blurb:
-      'Hunyuan3D 2.1 on ComfyUI. One photograph in, a decimated GLB out that three.js loads as is — cut out with BiRefNet first, and previewed in the same renderer a page would use.',
-    modality: 'mesh',
-    capability: 'mesh.generate',
-    to: '/generate/model',
-    glyph: '◆',
-  },
-  {
     key: 'char3d',
-    title: '3D characters',
+    title: '3D',
     blurb:
       'A reference image to a rigged, animated character, one reviewed step at a time: a three-view A-pose ' +
       'sheet from Qwen-Image-2.1-Turbo, a Pixal3D mesh with the colours of those views projected back, then ' +

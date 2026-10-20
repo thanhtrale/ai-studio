@@ -187,6 +187,68 @@ def strip_occlusion(path: Path) -> int:
     return k
 
 
+def _glb_read(path: Path) -> tuple[dict, bytes]:
+    import json as _json
+    import struct
+
+    b = path.read_bytes()
+    n = struct.unpack("<I", b[12:16])[0]
+    g = _json.loads(b[20:20 + n])
+    rest = b[20 + n:]
+    bin_len = struct.unpack("<I", rest[:4])[0] if len(rest) >= 8 else 0
+    return g, rest[8:8 + bin_len] if bin_len else b""
+
+
+def _glb_write(path: Path, g: dict, bin_chunk: bytes) -> None:
+    import json as _json
+    import struct
+
+    js = _json.dumps(g, separators=(",", ":")).encode()
+    js += b" " * ((4 - len(js) % 4) % 4)
+    bin_chunk += b"\0" * ((4 - len(bin_chunk) % 4) % 4)
+    body = struct.pack("<I", len(js)) + b"JSON" + js + struct.pack("<I", len(bin_chunk)) + b"BIN\0" + bin_chunk
+    path.write_bytes(b"glTF" + struct.pack("<I", 2) + struct.pack("<I", 12 + len(body)) + body)
+
+
+def attach_normal_map(path: Path, src: Path) -> bool:
+    """ai-studio: put the INPUT mesh's normal map back on a rigged GLB, rewriting it in place.
+
+    The bind goes through Blender with a material that carries the base colour only, so rigged.glb and
+    rest.glb came out with no normal map at all: every surface shaded as one smooth matte shell -- in a
+    PBR viewer it read as "a plaster statue" (chibi-martial-girl r06). The UVs are the input mesh's own
+    (the weights are copied back onto the ORIGINAL mesh), so its tangent-space normal map fits as it is.
+    Unlike the AO, a normal map does not depend on the pose. Returns whether one was attached.
+    """
+    try:
+        sg, sbin = _glb_read(src)
+    except Exception:  # noqa: BLE001
+        return False
+    sm = next((m for m in sg.get("materials", []) if "normalTexture" in m), None)
+    if not sm:
+        return False
+    stex = sg["textures"][sm["normalTexture"]["index"]]
+    simg = sg["images"][stex["source"]]
+    sbv = sg["bufferViews"][simg["bufferView"]]
+    data = sbin[sbv.get("byteOffset", 0):sbv.get("byteOffset", 0) + sbv["byteLength"]]
+
+    g, bin_chunk = _glb_read(path)
+    if not g.get("materials") or any("normalTexture" in m for m in g["materials"]):
+        return False
+    bin_chunk += b"\0" * ((4 - len(bin_chunk) % 4) % 4)
+    g.setdefault("bufferViews", []).append({"buffer": 0, "byteOffset": len(bin_chunk), "byteLength": len(data)})
+    bin_chunk += data
+    g["buffers"][0]["byteLength"] = len(bin_chunk) + ((4 - len(bin_chunk) % 4) % 4)
+    g.setdefault("images", []).append({"bufferView": len(g["bufferViews"]) - 1, "mimeType": simg.get("mimeType", "image/png")})
+    texture = {"source": len(g["images"]) - 1}
+    if g.get("samplers"):
+        texture["sampler"] = 0
+    g.setdefault("textures", []).append(texture)
+    for m in g["materials"]:
+        m["normalTexture"] = {"index": len(g["textures"]) - 1, **({"scale": sm["normalTexture"]["scale"]} if "scale" in sm["normalTexture"] else {})}
+    _glb_write(path, g, bin_chunk)
+    return True
+
+
 class HeadShrink:
     """Thu nhỏ đầu chibi quanh điểm cổ trước khi đưa MIA dự đoán, rồi trả mọi thứ về chỗ cũ.
 
@@ -1829,12 +1891,14 @@ def main() -> int:
                                      bake_anim_use_all_actions=False, path_mode="COPY", embed_textures=True)
             ao_stripped = {f: strip_occlusion(out / f) for f in ("rigged.glb", "rest.glb") if (out / f).is_file()}
             log(f"occlusion stripped: {ao_stripped}")
+            normal_attached = {f: attach_normal_map(out / f, src) for f in ("rigged.glb", "rest.glb") if (out / f).is_file()}
+            log(f"normal map attached: {normal_attached}")
 
         bones_n = len(arm_obj.data.bones)
         joints = {b.name: [round(x, 4) for x in (arm_obj.matrix_world @ b.head_local)] for b in arm_obj.data.bones}
         info = {"bones": bones_n, "clips": clips, "restPose": rest_pose, "armRollFixed": roll_fixed, "noFingers": no_fingers, "retarget": retarget,
                 "inplace": inplace, "canonical": canonical, "weights": weights_mode, "prep": prep_stats, "weightFix": wf_stats if (weight_fix or weights_mode == "heat") else False,
-                "headShrink": shrink_info, "predFrom": str(pred_from) if pred_from else None, "armSpace": arm_space_stats or False, "torsoClear": torso_stats or False, "sleeveSkinFix": sleeve_stats, "faceFromRef": face_stats, "kneeRaise": knee_stats, "windingFlipped": flipped["faces"], "aoStripped": ao_stripped, "verts": len(mesh_obj.data.vertices), "joints": joints, "peakVramMiB": peak,
+                "headShrink": shrink_info, "predFrom": str(pred_from) if pred_from else None, "armSpace": arm_space_stats or False, "torsoClear": torso_stats or False, "sleeveSkinFix": sleeve_stats, "faceFromRef": face_stats, "kneeRaise": knee_stats, "windingFlipped": flipped["faces"], "aoStripped": ao_stripped, "normalAttached": normal_attached, "verts": len(mesh_obj.data.vertices), "joints": joints, "peakVramMiB": peak,
                 "phaseMs": ph.ms, "seed": seed, "miaCommit": rt.get("commit")}
         (out / "info.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
         # Sản phẩm phụ của MIA (que xương, trọng số) — để soát vị trí khớp.

@@ -6,7 +6,7 @@
  * | step | jobs |
  * | --- | --- |
  * | ref  | the image arm once per view (a sheet is one "view"), then the tools arm splits and cross-checks each sheet |
- * | mesh | Pixal3D (skipped by `retexture`), the tools arm re-projects the input views' colours, then renders the checks |
+ * | mesh | Pixal3D (skipped by `retexture`), the tools arm re-projects the input views' colours (with `hairFix` fuses the hair, with `faceFix` flattens a chibi muzzle), then renders the checks |
  * | rig  | the rig arm, then the tools arm renders the clips and measures stretch and hands in the body |
  *
  * Every job is a real supervisor job, so the broker puts the right arm on the
@@ -134,7 +134,7 @@ const MESH_FIELDS: Record<string, string> = {
   bakeNormals: 'bakeNormals',
   bakeOcclusion: 'bakeOcclusion',
 };
-const MESH_RUNNER_KEYS = ['arm', 'views', 'reproject', 'retexture', 'precision'];
+const MESH_RUNNER_KEYS = ['arm', 'views', 'reproject', 'retexture', 'precision', 'hairFix', 'faceFix'];
 
 /** What the runner needs from the supervisor. */
 export interface Char3dCaller {
@@ -158,7 +158,7 @@ export interface NewRun {
  * exactly what was asked -- the prompt in full, the size, the arm.
  *
  *   ref:  { mode?: 'sheet' (default) | 'views', extra?, arm?, views?, prompts?, batch?, width?, height?, seed?, extraRefs? }
- *   mesh: { arm?, views: {front, left?, back?, right?}, seed?, reproject?, retexture?, precision?, ...Pixal3D fields }
+ *   mesh: { arm?, views: {front, left?, back?, right?}, seed?, reproject?, retexture?, precision?, hairFix?, faceFix?, ...Pixal3D fields }
  *   rig:  { arm?, mesh, animations?, predFrom?, skinFrom?, ...rig.py switches }
  */
 async function normalise(
@@ -185,7 +185,9 @@ async function normalise(
       config['extra'] = extra;
       config['prompts'] = { sheet: fillSheetPrompt(character, extra) };
       config['promptVersion'] = `sheet-${REF_PROMPT_VERSION}`;
-      config['batch'] = Math.max(1, Math.min(8, Number(config['batch']) || 4));
+      // Exactly one sheet per run: each generation is reviewed on its own before
+      // anything else is drawn. More sheets are more runs.
+      config['batch'] = 1;
       config['width'] = SHEET_SIZE.width;
       config['height'] = SHEET_SIZE.height;
     } else {
@@ -486,15 +488,23 @@ async function execute(storageDir: string, caller: Char3dCaller, id: string, run
         try {
           const stagedViews: Record<string, string> = {};
           for (const [view, file] of Object.entries(views)) stagedViews[view] = await stageIn(storageDir, id, file);
+          // `reproject: { lumMix, hairChroma, hairLum, flow }` tunes the projection; `true` or absent is the defaults.
+          const options = typeof config['reproject'] === 'object' && config['reproject'] !== null ? config['reproject'] : undefined;
           const report = await job<ToolReport>(TOOLS_ARM, 'Re-project colours', {
             task: 'reproject',
             glb: await stageIn(storageDir, id, raw),
             outPath: outRel(id, runId, 'mesh.glb'),
             views: stagedViews,
+            ...(options ? { options } : {}),
           });
           const map = await collectOut(storageDir, id, runId);
           outputs['basecolor'] = rel(map(String(report.result['basecolor'])));
-          outputs['reproject'] = { views: report.result['views'], texels: report.result['texels'], hair: report.result['hair'] };
+          outputs['reproject'] = {
+            views: report.result['views'],
+            texels: report.result['texels'],
+            hair: report.result['hair'],
+            lum: report.result['lum'],
+          };
           timing['reproject'] = timingOf(report);
         } catch (error) {
           // A failed re-projection still leaves Pixal3D's own mesh: put it
@@ -503,6 +513,60 @@ async function execute(storageDir: string, caller: Char3dCaller, id: string, run
           delete outputs['raw'];
           outputs['basecolor'] = outputs['basecolorRaw'];
           outputs['reproject'] = { error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // Pixal3D builds long hair as shredded cards; `hairFix` (true, or the
+      // script's options) fuses them into solid locks, keeping the fringe.
+      // The mesh before it stays as mesh_prehair.glb.
+      if (config['hairFix']) {
+        const before = path.join(dir, 'mesh_prehair.glb');
+        await rename(meshOut, before);
+        outputs['prehair'] = rel(before);
+        await save({ outputs });
+        try {
+          const options = typeof config['hairFix'] === 'object' ? config['hairFix'] : undefined;
+          const report = await job<ToolReport>(TOOLS_ARM, 'Fuse hair', {
+            task: 'hairfix',
+            glb: await stageIn(storageDir, id, before),
+            outPath: outRel(id, runId, 'mesh.glb'),
+            ...(options ? { options } : {}),
+          });
+          await collectOut(storageDir, id, runId);
+          const stats = { ...report.result };
+          delete stats['out'];
+          outputs['hairFix'] = stats;
+          timing['hairFix'] = timingOf(report);
+        } catch (error) {
+          await rename(before, meshOut);
+          delete outputs['prehair'];
+          outputs['hairFix'] = { error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      // Pixal3D makes a chibi face into a muzzle (a wedge at the mouth, big ears
+      // out to the sides); `faceFix` (true, or the script's options) flattens
+      // it. The mesh before it stays as mesh_preface.glb.
+      if (config['faceFix']) {
+        const before = path.join(dir, 'mesh_preface.glb');
+        await rename(meshOut, before);
+        outputs['preface'] = rel(before);
+        await save({ outputs });
+        try {
+          const options = typeof config['faceFix'] === 'object' ? config['faceFix'] : undefined;
+          const report = await job<ToolReport>(TOOLS_ARM, 'Flatten the muzzle', {
+            task: 'facefix',
+            glb: await stageIn(storageDir, id, before),
+            outPath: outRel(id, runId, 'mesh.glb'),
+            ...(options ? { options } : {}),
+          });
+          await collectOut(storageDir, id, runId);
+          const stats = { ...report.result };
+          delete stats['out'];
+          outputs['faceFix'] = stats;
+          timing['faceFix'] = timingOf(report);
+        } catch (error) {
+          await rename(before, meshOut);
+          delete outputs['preface'];
+          outputs['faceFix'] = { error: error instanceof Error ? error.message : String(error) };
         }
       }
       outputs['bytes'] = (await stat(meshOut)).size;

@@ -1,15 +1,18 @@
 <script setup lang="ts">
 /**
- * 3D characters: every character, and a new one from a reference image.
+ * 3D: a new character from a reference image, the 3D gallery, then every
+ * character.
  *
  * The chain behind each is reference -> three-view A-pose sheet -> Pixal3D
  * mesh -> Mixamo rig, one step per run, each looked at before the next. A
- * character's own page (`/char3d/<id>`) is where that happens. The store is
- * `storage/char3d/`; see `server/char3d/store.ts`.
+ * character's own page (`/char3d/<id>`) is where that happens; a good rig is
+ * added from there to the gallery (`/char3d/gallery`), where it plays the
+ * Mixamo clip library. The store is `storage/char3d/`; see
+ * `server/char3d/store.ts`.
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
-import type { Char3dCharacterSummary } from '#shared/char3d';
+import type { Char3dCharacterSummary, Char3dClipLibrary, Char3dReviewEntry } from '#shared/char3d';
 
 import UiAlert from '../../components/ui/Alert.vue';
 import UiBadge from '../../components/ui/Badge.vue';
@@ -19,12 +22,19 @@ import UiField from '../../components/ui/Field.vue';
 import UiInput from '../../components/ui/Input.vue';
 import UiTextarea from '../../components/ui/Textarea.vue';
 
-useHead({ title: '3D characters' });
+useHead({ title: '3D' });
 
 const { data, refresh } = await useFetch<{ characters: Char3dCharacterSummary[] }>('/api/char3d');
 const characters = computed(() => data.value?.characters ?? []);
 
-const creating = ref(false);
+const { data: galleryData } = await useFetch<{ saved: Char3dReviewEntry[] }>('/api/char3d-review');
+const { data: library } = await useFetch<Char3dClipLibrary>('/api/char3d-review/clips');
+const galleryEntries = computed(() => (galleryData.value?.saved ?? []).filter((entry) => !entry.missing));
+const clipCount = computed(() => library.value?.clips.length ?? 0);
+const galleryThumb = (entry: Char3dReviewEntry): string =>
+  entry.thumb ? `/api/char3d/${entry.character}/file/${entry.thumb}` : '';
+
+const creating = ref(true);
 const form = reactive({ name: '', subject: 'chibi character', style: 'chibi', traits: '' });
 const file = ref<File | null>(null);
 const preview = ref('');
@@ -71,22 +81,17 @@ onBeforeUnmount(() => {
     <div class="mx-auto max-w-5xl space-y-6 p-8">
       <header class="flex flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1 space-y-1">
-          <h1 class="text-2xl font-semibold">3D characters</h1>
+          <h1 class="text-2xl font-semibold">3D</h1>
           <p class="text-sm text-slate-400">
             Reference → three-view A-pose sheet → Pixal3D mesh → Mixamo rig and clips. One step per run, each
             reviewed before the next uses it.
           </p>
         </div>
-        <NuxtLink
-          to="/char3d/review"
-          class="rounded px-3 py-1.5 text-sm text-slate-400 hover:bg-white/5 hover:text-slate-100"
-          title="Saved rigged characters × the Mixamo clip library"
-        >
-          Animation review
-        </NuxtLink>
         <UiButton v-if="!creating" variant="primary" @click="creating = true">New character</UiButton>
       </header>
 
+      <!-- 1. generate a character -->
+      <h2 v-if="creating" class="text-lg font-semibold">New character</h2>
       <UiCard v-if="creating">
         <form class="space-y-4 p-5" @submit.prevent="create">
           <div class="flex flex-wrap gap-4">
@@ -138,7 +143,40 @@ onBeforeUnmount(() => {
         </form>
       </UiCard>
 
-      <p v-if="!characters.length && !creating" class="text-sm text-slate-500">No characters yet.</p>
+      <!-- 2. the 3D gallery: good rigs x the clip library -->
+      <section class="space-y-2">
+        <div class="flex items-baseline gap-2">
+          <h2 class="text-lg font-semibold">3D Gallery</h2>
+          <span class="text-sm text-slate-500">
+            {{ galleryEntries.length }} rigged character{{ galleryEntries.length === 1 ? '' : 's' }} · {{ clipCount }} animations
+          </span>
+          <span class="flex-1" />
+          <NuxtLink to="/char3d/gallery" class="text-sm text-indigo-300 hover:text-indigo-200">Open gallery →</NuxtLink>
+        </div>
+        <NuxtLink to="/char3d/gallery" class="block">
+          <UiCard interactive>
+            <div class="flex gap-3 overflow-x-auto p-3">
+              <p v-if="!galleryEntries.length" class="text-sm text-slate-500">
+                Nothing in the gallery yet. Open a good rig run of a character and press "Add to 3D gallery".
+              </p>
+              <div v-for="entry in galleryEntries" :key="entry.id" class="w-32 shrink-0 space-y-1">
+                <img
+                  v-if="galleryThumb(entry)"
+                  :src="galleryThumb(entry)"
+                  alt=""
+                  class="h-40 w-32 rounded bg-white object-contain"
+                  loading="lazy"
+                />
+                <p class="truncate text-xs text-slate-300">{{ entry.name }}</p>
+              </div>
+            </div>
+          </UiCard>
+        </NuxtLink>
+      </section>
+
+      <!-- 3. every character -->
+      <h2 class="text-lg font-semibold">Characters</h2>
+      <p v-if="!characters.length" class="text-sm text-slate-500">No characters yet.</p>
 
       <section class="flex flex-wrap gap-4">
         <NuxtLink v-for="character in characters" :key="character.id" :to="`/char3d/${character.id}`" class="block w-72">

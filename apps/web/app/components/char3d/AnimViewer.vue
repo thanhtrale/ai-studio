@@ -828,13 +828,19 @@ onMounted(async () => {
   renderer = new T.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = T.SRGBColorSpace;
+  // A character's base colour is pastel and light already. With no tone mapping and an environment, a
+  // hemisphere at 0.6 and a sun at 1.2 summed past 1, the pinks and whites clipped to white and the
+  // figure read as chalk (chibi-martial-girl r06). Neutral tone mapping keeps the hue of what is bright;
+  // the lights are lowered to match.
+  renderer.toneMapping = T.NeutralToneMapping;
   el.appendChild(renderer.domElement);
   scene = new T.Scene();
   scene.background = new T.Color(0x17181c);
   const pm = new T.PMREMGenerator(renderer);
   scene.environment = pm.fromScene(new T.RoomEnvironment(), 0.04).texture;
-  scene.add(new T.HemisphereLight(0xffffff, 0xb0b8c8, 0.6));
-  const sun = new T.DirectionalLight(0xffffff, 1.2);
+  scene.environmentIntensity = 0.7;
+  scene.add(new T.HemisphereLight(0xffffff, 0xb0b8c8, 0.25));
+  const sun = new T.DirectionalLight(0xffffff, 0.9);
   sun.position.set(1, 3, 2);
   scene.add(sun);
   const grid = new T.GridHelper(4, 20, 0x3c414c, 0x272a31);

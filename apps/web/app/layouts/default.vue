@@ -17,9 +17,8 @@ const NAV = [
   { to: '/', label: 'Home' },
   { to: '/generate/image', label: 'Image' },
   { to: '/generate/video', label: 'Video' },
-  { to: '/generate/model', label: '3D' },
-  { to: '/generate/rig', label: 'Rig' },
-  { to: '/char3d', label: 'Character' },
+  // One 3D entry: the character pipeline (reference -> sheet -> mesh -> rig) and its gallery.
+  { to: '/char3d', label: '3D' },
   { to: '/analyze/block', label: 'Analyze' },
   { to: '/library', label: 'Library' },
 ] as const;

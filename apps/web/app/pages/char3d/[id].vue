@@ -82,6 +82,26 @@ function meshThumb(run?: Char3dRun): string {
   return file(turntable?.[1] ?? turntable?.[0] ?? files['face_front']);
 }
 
+/** The sidebar lists the current step's runs only; "All runs" lists every one. Newest first. */
+const sidebarRuns = computed(() =>
+  runs.value.filter((run) => tab.value === 'runs' || run.step === tab.value).slice().reverse(),
+);
+// Opening a run of another step (from its lineage, say) moves to that step's tab, so
+// the sidebar keeps showing the list the open run belongs to.
+watch(detail, (run) => {
+  if (run && tab.value !== 'runs' && run.step !== tab.value) tab.value = run.step;
+});
+
+/** A run's picture in the sidebar: the front view of its first sheet, or its mesh's turntable frame. */
+function sidebarThumb(run: Char3dRun): string {
+  if (run.status !== 'done') return '';
+  if (run.step === 'ref') {
+    const set = sheetSets(run)[0];
+    return file(set?.views?.front ?? set?.sheet);
+  }
+  return meshThumb(run);
+}
+
 const actionError = ref<string | null>(null);
 
 // --- the lightbox: one run's outputs, full size, for review -------------------------
@@ -95,10 +115,6 @@ function review(run: string, key?: string): void {
   const items = byId.value.has(run) ? char3dReviewItems(byId.value.get(run)!) : [];
   const start = items.find((item) => item.key === key) ?? items[0];
   if (start) lightbox.value = { run, key: start.key };
-}
-function reviewDetails(run: string): void {
-  lightbox.value = null;
-  openRun.value = run;
 }
 
 async function setGallery(add: boolean, run: string, set?: number): Promise<void> {
@@ -156,10 +172,11 @@ function useForNext(item: Char3dGalleryItem): void {
 }
 
 // --- generate -----------------------------------------------------------------------
-const refBatch = ref('4');
+const refBatch = ref('1');
 const refExtra = ref('');
 const meshCount = ref('1');
 const meshReproject = ref(true);
+const meshHairFix = ref(false);
 const busy = ref(false);
 
 async function post(body: Record<string, unknown>): Promise<void> {
@@ -172,11 +189,15 @@ async function generate(): Promise<void> {
   try {
     if (tab.value === 'ref') {
       const extra = refExtra.value.trim();
-      await post({
-        step: 'ref',
-        intent: `sheet ×${refBatch.value}${extra ? ` — ${extra}` : ''}`,
-        config: { mode: 'sheet', batch: Number(refBatch.value), extra },
-      });
+      // One sheet per run, so each is reviewed on its own as soon as it is
+      // drawn -- never a batch generated first and judged together.
+      for (let index = 0; index < Number(refBatch.value); index += 1) {
+        await post({
+          step: 'ref',
+          intent: `sheet${extra ? ` — ${extra}` : ''}`,
+          config: { mode: 'sheet', batch: 1, extra },
+        });
+      }
     } else if (tab.value === 'mesh') {
       const item = pickedRef.value;
       if (!item?.views) throw new Error('Pick a reference from the gallery first');
@@ -188,7 +209,7 @@ async function generate(): Promise<void> {
           step: 'mesh',
           parent: item.run,
           intent: `mesh from ${item.run}${item.set !== undefined ? ` sheet ${item.set}` : ''}, random seed`,
-          config: { views, ...(meshReproject.value ? {} : { reproject: false }) },
+          config: { views, ...(meshReproject.value ? {} : { reproject: false }), ...(meshHairFix.value ? { hairFix: true } : {}) },
         });
       }
     } else if (tab.value === 'rig') {
@@ -204,7 +225,7 @@ async function generate(): Promise<void> {
   }
 }
 
-// --- the animation review list --------------------------------------------------------
+// --- the 3D gallery (rigged characters x the clip library) -------------------------
 const { data: reviewList, refresh: refreshReviewList } = await useFetch<{ saved: Char3dReviewEntry[] }>('/api/char3d-review');
 const savedForReview = (run: string): boolean => !!reviewList.value?.saved.some((entry) => entry.id === `${id.value}-${run}`);
 
@@ -215,7 +236,7 @@ async function saveForReview(run: string, open: boolean): Promise<void> {
       await $fetch('/api/char3d-review', { method: 'POST', body: { character: id.value, run } });
       await refreshReviewList();
     }
-    if (open) await navigateTo(`/char3d/review?c=${id.value}-${run}`);
+    if (open) await navigateTo(`/char3d/gallery?c=${id.value}-${run}`);
   } catch (error) {
     actionError.value = describeFetchError(error);
   }
@@ -234,7 +255,7 @@ const running = (step: Tab): number =>
 
 <template>
   <div class="flex h-full">
-    <aside class="w-64 shrink-0 space-y-4 overflow-y-auto border-r border-white/10 p-4">
+    <aside class="w-96 shrink-0 space-y-4 overflow-y-auto border-r border-white/10 p-4">
       <NuxtLink to="/char3d" class="text-sm text-slate-400 hover:text-slate-100">← 3D characters</NuxtLink>
       <div v-if="data" class="flex gap-3">
         <img :src="file(data.character.ref)" alt="" class="h-20 w-16 shrink-0 rounded border border-white/10 bg-white object-contain" />
@@ -261,6 +282,36 @@ const running = (step: Tab): number =>
           <span class="text-xs text-slate-500" :title="entry === 'runs' ? 'All runs' : 'Items in the gallery'">{{ counts[entry] }}</span>
         </button>
       </nav>
+      <!-- every run, newest first: one generation is one run, each with its own review -->
+      <section v-if="runs.length" class="space-y-1">
+        <p class="text-xs uppercase tracking-wide text-slate-500">
+          {{ tab === 'runs' ? 'All runs' : `${TAB_LABEL[tab]} runs` }} ({{ sidebarRuns.length }})
+        </p>
+        <p v-if="!sidebarRuns.length" class="px-2 text-xs text-slate-500">No {{ TAB_LABEL[tab].toLowerCase() }} run yet.</p>
+        <button
+          v-for="run in sidebarRuns"
+          :key="run.id"
+          type="button"
+          class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors"
+          :class="openRun === run.id ? 'bg-white/10 text-slate-100' : 'text-slate-300 hover:bg-white/5'"
+          :title="run.review?.summary ?? run.intent"
+          @click="openRun = run.id"
+        >
+          <span class="size-2 shrink-0 rounded-full" :class="STATUS_DOT[run.status] ?? 'bg-slate-500'" />
+          <img v-if="sidebarThumb(run)" :src="sidebarThumb(run)" alt="" class="h-10 w-10 shrink-0 rounded bg-white object-contain" loading="lazy" />
+          <span v-else class="h-10 w-10 shrink-0 rounded bg-white/5" />
+          <span class="min-w-0 flex-1">
+            <span class="flex items-center gap-1.5">
+              <b class="font-mono text-xs">{{ run.id }}</b>
+              <span v-if="gallery.some((item) => item.run === run.id)" class="text-xs text-emerald-300" title="In the gallery">✓</span>
+            </span>
+            <span class="block truncate text-xs text-slate-500">{{ run.intent }}</span>
+          </span>
+          <UiBadge v-if="run.review" :tone="VERDICT_TONE[run.review.verdict]" :title="run.review.verdict">{{ run.review.score }}</UiBadge>
+          <span v-else-if="run.status === 'done'" class="text-xs text-amber-300" title="Awaiting review">—</span>
+          <span v-else class="text-xs" :class="run.status === 'error' ? 'text-rose-300' : 'text-indigo-300'">{{ run.status }}</span>
+        </button>
+      </section>
       <section v-if="data?.character.notes?.length" class="space-y-1">
         <button type="button" class="text-left text-sm text-slate-400 hover:text-slate-100" @click="showNotes = !showNotes">
           Learnings ({{ data.character.notes.length }})
@@ -340,7 +391,7 @@ const running = (step: Tab): number =>
                     </UiField>
                   </div>
                   <div class="w-24">
-                    <UiField label="Sheets" for="ref-batch"><UiSelect id="ref-batch" v-model="refBatch" :options="COUNTS" /></UiField>
+                    <UiField label="Runs" for="ref-batch" hint="One sheet each"><UiSelect id="ref-batch" v-model="refBatch" :options="COUNTS" /></UiField>
                   </div>
                 </div>
               </template>
@@ -373,6 +424,11 @@ const running = (step: Tab): number =>
                     v-model="meshReproject"
                     label="Re-project colours"
                     hint="Projects the input views' colours back onto the texture: fixes the face, hairpins and colour drift."
+                  />
+                  <UiCheckbox
+                    v-model="meshHairFix"
+                    label="Fuse hair"
+                    hint="Long hair: fuses Pixal3D's shredded hair cards into smooth solid locks (the fringe stays as it is)."
                   />
                   <p class="text-xs text-slate-500">front + left + back · a random seed each · runs one after another</p>
                 </div>
@@ -475,12 +531,12 @@ const running = (step: Tab): number =>
                 <div class="space-y-2 p-2">
                   <button
                     type="button"
-                    class="flex w-full cursor-zoom-in justify-center gap-0.5 rounded bg-white"
+                    class="flex w-full cursor-zoom-in justify-center gap-0.5 overflow-hidden rounded bg-white"
                     :title="`Review ${item.run}`"
                     @click="review(item.run, item.set !== undefined ? `sheet-${item.set}-front` : undefined)"
                   >
                     <template v-if="item.step === 'ref'">
-                      <img v-for="view in SHEET_VIEWS.filter((v) => item.views?.[v])" :key="view" :src="file(item.views?.[view])" alt="" class="h-44 w-1/3 object-contain" loading="lazy" />
+                      <img v-for="view in SHEET_VIEWS.filter((v) => item.views?.[v])" :key="view" :src="file(item.views?.[view])" alt="" class="h-44 min-w-0 flex-1 object-contain" loading="lazy" />
                     </template>
                     <img v-else :src="meshThumb(byId.get(item.run))" alt="" class="h-56 w-full object-contain" loading="lazy" />
                   </button>
@@ -513,7 +569,7 @@ const running = (step: Tab): number =>
                     {{ item.step === 'ref' ? 'Make mesh →' : 'Rig →' }}
                   </UiButton>
                   <UiButton v-else size="sm" class="w-full" @click="saveForReview(item.run, true)">
-                    {{ savedForReview(item.run) ? 'Animation review →' : 'Save and review →' }}
+                    {{ savedForReview(item.run) ? 'In 3D gallery →' : 'Add to 3D gallery →' }}
                   </UiButton>
                 </div>
               </UiCard>
@@ -532,26 +588,6 @@ const running = (step: Tab): number =>
       :heading="lightbox?.run"
       @close="lightbox = null"
       @navigate="(key: string) => lightbox && (lightbox = { run: lightbox.run, key })"
-    >
-      <template #actions="{ item }">
-        <!-- A sheet run's gallery entries are per sheet: only an item that belongs to one can add it. -->
-        <template v-if="lightbox && (byId.get(lightbox.run)?.step !== 'ref' || item.set !== undefined)">
-          <UiButton
-            v-if="inGallery(lightbox!.run, item.set)"
-            size="sm"
-            title="Remove from the gallery (the run is kept)"
-            @click="setGallery(false, lightbox!.run, item.set)"
-          >
-            In gallery ✓
-          </UiButton>
-          <UiButton v-else size="sm" title="Add to the gallery so the next step can use it" @click="setGallery(true, lightbox!.run, item.set)">
-            Add {{ item.set !== undefined ? `sheet ${item.set}` : '' }} to gallery
-          </UiButton>
-        </template>
-        <UiButton size="sm" variant="primary" title="Open the run: score it, see its config and timing" @click="reviewDetails(lightbox!.run)">
-          Score / details
-        </UiButton>
-      </template>
-    </Char3dLightbox>
+    />
   </div>
 </template>

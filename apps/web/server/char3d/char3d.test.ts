@@ -139,17 +139,15 @@ describe('a character from reference to rig', () => {
     });
     expect(character.id).toBe('cau-be-vo-sinh');
 
-    // 1. reference: two sheets, split and cross-checked
+    // 1. reference: ONE sheet, split and cross-checked -- a run asking for more still gets one
     const ref = await createRun(storage, caller, character.id, 'ref', { config: { batch: 2 } });
     expect(ref.config['mode']).toBe('sheet');
+    expect(ref.config['batch']).toBe(1);
     expect(ref.config['width']).toBe(2048);
     expect(String((ref.config['prompts'] as Record<string, string>)['sheet'])).toContain('white wrap shirt tied at the left hip');
     const refDone = await settle(character.id, ref.id);
     expect(refDone.status, refDone.error).toBe('done');
-    expect(refDone.outputs?.['images'].map((image: { file: string }) => image.file)).toEqual([
-      'runs/r01-ref/ref/sheet_0.png',
-      'runs/r01-ref/ref/sheet_1.png',
-    ]);
+    expect(refDone.outputs?.['images'].map((image: { file: string }) => image.file)).toEqual(['runs/r01-ref/ref/sheet_0.png']);
     const sets = refDone.outputs?.['sets'];
     expect(sets[0].views.front).toBe('runs/r01-ref/ref/sheet0_front.png');
     expect(sets[0].seed).toBe(100);

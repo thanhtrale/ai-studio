@@ -4,7 +4,9 @@ The work itself is in `scripts/`, vendored from companion-web where every
 constant in it was measured: `rig.py` (Make-It-Animatable v2 joints, SkinTokens
 weights, Blender bind and clips), `render.py` (Workbench check renders and the
 stretch and hand-in-body measures), `reproject.py` (the input views' colours
-projected back onto a Pixal3D atlas) and `split_sheet.py` (a three-view sheet
+projected back onto a Pixal3D atlas), `hairfix.py` (Pixal3D's shredded hair
+cards fused into solid locks), `facefix.py` (a chibi muzzle flattened, ears smaller) and
+`split_sheet.py` (a three-view sheet
 cut into views and cross-checked). Each reads one JSON job and writes JSON lines
 on stdout -- `stage`, `step`, then `done` or `error` -- and that protocol is
 what this module translates.
@@ -33,13 +35,15 @@ from typing import Any
 #: no GPU, so a render after a mesh never evicts the mesh arm.
 ROLE_TASKS: dict[str, tuple[str, ...]] = {
     "rig": ("rig",),
-    "tools": ("split", "reproject", "render"),
+    "tools": ("split", "reproject", "hairfix", "facefix", "render"),
 }
 
 SCRIPTS: dict[str, str] = {
     "rig": "rig.py",
     "split": "split_sheet.py",
     "reproject": "reproject.py",
+    "hairfix": "hairfix.py",
+    "facefix": "facefix.py",
     "render": "render.py",
 }
 
@@ -48,6 +52,8 @@ TASK_LABELS: dict[str, str] = {
     "rig": "Rig",
     "split": "Split sheets",
     "reproject": "Re-project colours",
+    "hairfix": "Fuse hair",
+    "facefix": "Flatten the muzzle",
     "render": "Render checks",
 }
 
@@ -86,6 +92,25 @@ REPROJECT_OPTIONS: dict[str, tuple[type, ...]] = {
     "flow": (bool,),
     "hairChroma": (int, float),
     "hairLum": (int, float),
+    "lumMix": (int, float),
+}
+HAIRFIX_OPTIONS: dict[str, tuple[type, ...]] = {
+    "dilate": (int, float),
+    "erode": (int, float),
+    "voxel": (int, float),
+    "smooth": (int,),
+    "lumMax": (int, float),
+    "fringeDepth": (int, float),
+    "fringeFront": (int, float),
+    "fringeWidth": (int, float),
+    "roughness": (int, float),
+}
+FACEFIX_OPTIONS: dict[str, tuple[type, ...]] = {
+    "half": (int, float),
+    "eyeAbove": (int, float),
+    "flatten": (int,),
+    "ears": (int, float),
+    "earX": (int, float),
 }
 RENDER_MODES = ("turntable", "anim")
 RENDER_OPTIONS: dict[str, tuple[type, ...]] = {
@@ -250,6 +275,24 @@ def _reproject(body: dict[str, Any], roots: Roots) -> ScriptJob:
     return ScriptJob("reproject", SCRIPTS["reproject"], payload, out.parent, f"from {', '.join(views)}")
 
 
+def _hairfix(body: dict[str, Any], roots: Roots) -> ScriptJob:
+    glb = _existing(roots.inputs, body.get("glb"), "glb", (".glb",))
+    out = _inside(roots.outputs, body.get("outPath"), "outPath")
+    if out.suffix.lower() != ".glb":
+        raise JobError("outPath must end in .glb")
+    payload = {**_options(body, HAIRFIX_OPTIONS), "glb": str(glb), "out": str(out)}
+    return ScriptJob("hairfix", SCRIPTS["hairfix"], payload, out.parent, "fuse hair cards")
+
+
+def _facefix(body: dict[str, Any], roots: Roots) -> ScriptJob:
+    glb = _existing(roots.inputs, body.get("glb"), "glb", (".glb",))
+    out = _inside(roots.outputs, body.get("outPath"), "outPath")
+    if out.suffix.lower() != ".glb":
+        raise JobError("outPath must end in .glb")
+    payload = {**_options(body, FACEFIX_OPTIONS), "glb": str(glb), "out": str(out)}
+    return ScriptJob("facefix", SCRIPTS["facefix"], payload, out.parent, "flatten the muzzle, smaller ears")
+
+
 def _render(body: dict[str, Any], roots: Roots) -> ScriptJob:
     glb = _existing(roots.inputs, body.get("glb"), "glb", (".glb",))
     out_dir = _inside(roots.outputs, body.get("outDir"), "outDir")
@@ -260,7 +303,14 @@ def _render(body: dict[str, Any], roots: Roots) -> ScriptJob:
     return ScriptJob("render", SCRIPTS["render"], payload, out_dir, mode)
 
 
-PARSERS = {"rig": _rig, "split": _split, "reproject": _reproject, "render": _render}
+PARSERS = {
+    "rig": _rig,
+    "split": _split,
+    "reproject": _reproject,
+    "hairfix": _hairfix,
+    "facefix": _facefix,
+    "render": _render,
+}
 
 
 def parse_job(body: dict[str, Any], role: str, roots: Roots) -> ScriptJob:

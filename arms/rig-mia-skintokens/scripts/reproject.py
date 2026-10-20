@@ -303,6 +303,27 @@ def reproject(job: dict) -> dict:
         newc[ht] = g2 + (c - grey) * desat * (g2 / np.maximum(grey, 1e-3))
         hair_stats = {"faces": int(hair_f.sum()), "texels": int(ht.sum()), "chroma": desat, "lumFrom": round(med, 3), "lumTo": target,
                       "meanRGB": [int(x) for x in (newc[ht].mean(0) * 255).round()]}
+    # ai-studio: the sheet is flat anime colour, drawn LIGHTER than the original (chibi-martial-girl r05:
+    # pink L 75 after projection vs 71 in the original, 67 on Pixal3D's own atlas; non-hair median 72 vs 62)
+    # and with no shading -- in a viewer that read as washed white and chalky, "a plaster statue". So the
+    # lightness is mixed back towards Pixal3D's (`lumMix`, 0 = the old behaviour) while hue and chroma stay
+    # the sheet's. Only where the two roughly agree: where they differ a lot (eyes, a streak Pixal3D painted
+    # across the face) the projection is what fixes the texture, and it is kept as it is. Hair is left out --
+    # its lightness was set on purpose above.
+    lum_mix = float(job.get("lumMix", 0.5))
+    lum_stats = None
+    if lum_mix > 0:
+        lab_new = cv2.cvtColor(newc.reshape(-1, 1, 3).astype(np.float32), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+        lab_old = cv2.cvtColor(old.reshape(-1, 1, 3).astype(np.float32), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+        d_l = np.abs(lab_new[:, 0] - lab_old[:, 0])
+        k = lum_mix * np.clip(1 - d_l / 20.0, 0, 1)
+        if hair_stats is not None:
+            k[ht] = 0
+        before = float(np.median(lab_new[:, 0]))
+        lab_new[:, 0] = (1 - k) * lab_new[:, 0] + k * lab_old[:, 0]
+        newc = np.clip(cv2.cvtColor(lab_new.reshape(-1, 1, 3), cv2.COLOR_LAB2RGB).reshape(-1, 3), 0, 1)
+        lum_stats = {"mix": lum_mix, "medianLFrom": round(before, 1), "medianLTo": round(float(np.median(lab_new[:, 0])), 1),
+                     "mixedShare": round(float((k > 0.05).mean()), 3)}
     outtex[ty, tx] = newc
     img8 = (outtex * 255).round().astype(np.uint8)
     cov = cover.copy()
@@ -319,7 +340,7 @@ def reproject(job: dict) -> dict:
     open(bc, "wb").write(buf.getvalue())
     emit("step", stage="write", i=5, of=5)
     return {"path": dst, "basecolor": bc, "views": stats,
-            "hair": hair_stats, "texels": {"total": int(len(ty)), "projected": int((wsum > 0).sum()), "mappedFar": int((far[:, 0] > 0.5).sum())}}
+            "hair": hair_stats, "lum": lum_stats, "texels": {"total": int(len(ty)), "projected": int((wsum > 0).sum()), "mappedFar": int((far[:, 0] > 0.5).sum())}}
 
 
 def main() -> int:

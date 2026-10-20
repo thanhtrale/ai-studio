@@ -141,6 +141,18 @@ def tag_text(text: str) -> list[str]:
     return out
 
 
+# ai-studio: one primary CATEGORY per clip for the gallery's category filter -- the most specific group
+# among its tags (a sword combo is "weapon" before "combat", a dance step "dance" before "locomotion").
+CATEGORY_ORDER = ["weapon", "combat", "dance", "sports", "interact", "gesture", "locomotion", "pose", "rest", "style"]
+
+
+def category_of(tags: list[str]) -> str:
+    groups = {TAGS[t][0] for t in tags if t in TAGS}
+    if "in-place" in tags:
+        groups.add("locomotion")
+    return next((g for g in CATEGORY_ORDER if g in groups), "other")
+
+
 def length_tag(dur: float | None) -> list[str]:
     if dur is None:
         return []
@@ -209,6 +221,7 @@ def index() -> int:
         text = " ".join(str(m.get(k) or "") for k in ("name", "description"))
         tags = tag_text(text) + length_tag(m.get("durS")) + list(m.get("extraTags") or [])
         m["tags"] = sorted(set(tags))
+        m["category"] = category_of(m["tags"])
         m["thumb"] = (LIB / "thumbs" / (mp.stem + ".gif")).is_file()
         rows.append(m)
     groups = {k: g for k, (g, _) in TAGS.items()}
@@ -216,7 +229,10 @@ def index() -> int:
     (LIB / "index.json").write_text(json.dumps({"builtAt": int(time.time() * 1000), "tagGroups": groups, "groupOrder": TAG_GROUPS + ["source"],
                                                 "clips": rows}, ensure_ascii=False), encoding="utf-8")
     untagged = sum(1 for r in rows if not [t for t in r["tags"] if t not in ("short", "long")])
-    print(json.dumps({"clips": len(rows), "untagged": untagged}))
+    categories: dict[str, int] = {}
+    for r in rows:
+        categories[r["category"]] = categories.get(r["category"], 0) + 1
+    print(json.dumps({"clips": len(rows), "untagged": untagged, "categories": categories}))
     return 0
 
 

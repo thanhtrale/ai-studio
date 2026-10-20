@@ -146,7 +146,22 @@ def cut_hanging_hair(obj, lum_max: float) -> tuple[dict, list]:
     n = len(bm.faces)
     dark = np.zeros(n, dtype=bool)
     above = np.zeros(n, dtype=bool)
+    # Vật liệu KHÔNG có texture (tóc đã đúc của `hairfix.py`: một màu, không UV) đọc màu ngay trên vật liệu, đổi
+    # linear → sRGB cho cùng thang với điểm ảnh — lấy mẫu atlas theo UV rỗng thì tóc không bị cắt (r14/r16).
+    flat: dict[int, float] = {}
+    for i, m in enumerate(obj.data.materials):
+        if not (m and m.use_nodes):
+            continue
+        bsdf = next((nd for nd in m.node_tree.nodes if nd.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is not None and not bsdf.inputs["Base Color"].links:
+            c = np.array(bsdf.inputs["Base Color"].default_value[:3], dtype=np.float64)
+            c = np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+            flat[i] = float(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])
     for f in bm.faces:
+        if f.material_index in flat:
+            dark[f.index] = flat[f.material_index] < lum_max
+            above[f.index] = f.calc_center_median().z >= neck
+            continue
         u = sum(l[uvl].uv.x for l in f.loops) / len(f.loops)
         v = sum(l[uvl].uv.y for l in f.loops) / len(f.loops)
         p = px[min(h - 1, max(0, int(v * h))), min(w - 1, max(0, int(u * w)))]
