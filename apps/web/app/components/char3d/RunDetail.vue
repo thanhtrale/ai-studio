@@ -562,8 +562,8 @@ watch(
           <p v-for="clip in outputs['clips'] ?? []" :key="clip.name" class="text-xs text-slate-500">
             clip <b class="text-slate-300">{{ clip.name }}</b> · frames {{ clip.frames?.join('–') }}
           </p>
-          <a :href="file(outputs['glb'])" download class="block text-indigo-300 hover:text-indigo-200">rigged.glb</a>
-          <a v-if="outputs['fbx']" :href="file(outputs['fbx'])" class="block text-indigo-300 hover:text-indigo-200">rigged.fbx</a>
+          <a :href="file(outputs['glb'])" :download="`${charId}.glb`" class="block text-indigo-300 hover:text-indigo-200">{{ charId }}.glb</a>
+          <a v-if="outputs['fbx']" :href="file(outputs['fbx'])" :download="`${charId}.fbx`" class="block text-indigo-300 hover:text-indigo-200">{{ charId }}.fbx</a>
           <p class="font-medium">Original reference</p>
           <img :src="file(character.ref)" alt="" class="h-40 rounded border border-white/10 bg-white object-contain" />
         </div>

@@ -16,6 +16,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'v
 import type { Char3dDetail, Char3dGalleryItem, Char3dReviewEntry, Char3dRun, Char3dSheetSet, Char3dStep } from '#shared/char3d';
 import { galleryKey, SHEET_VIEWS } from '#shared/char3d';
 
+import AutoPanel from '../../components/char3d/AutoPanel.vue';
 import Char3dLightbox from '../../components/char3d/Char3dLightbox.vue';
 import RunDetail from '../../components/char3d/RunDetail.vue';
 import UiAlert from '../../components/ui/Alert.vue';
@@ -59,7 +60,9 @@ const openRun = ref(String(route.query['run'] ?? ''));
 watch([tab, openRun], ([nextTab, run]) => void router.replace({ query: { tab: nextTab, ...(run ? { run } : {}) } }));
 const detail = computed(() => (openRun.value ? byId.value.get(openRun.value) : undefined));
 
-const live = computed(() => runs.value.some((run) => run.status === 'queued' || run.status === 'running'));
+const live = computed(
+  () => data.value?.auto?.status === 'running' || runs.value.some((run) => run.status === 'queued' || run.status === 'running'),
+);
 let timer: ReturnType<typeof setInterval> | undefined;
 onMounted(() => (timer = setInterval(() => live.value && void refresh(), 4000)));
 onBeforeUnmount(() => timer && clearInterval(timer));
@@ -330,6 +333,15 @@ const running = (step: Tab): number =>
       <UiAlert v-if="loadError" tone="error">{{ describeFetchError(loadError) }}</UiAlert>
       <div v-else-if="data" class="mx-auto max-w-6xl space-y-5">
         <UiAlert v-if="actionError" tone="error">{{ actionError }}</UiAlert>
+
+        <AutoPanel
+          v-if="!detail"
+          :char-id="id"
+          :character="data.character"
+          :auto="data.auto"
+          @refresh="refresh()"
+          @open="openRun = $event"
+        />
 
         <RunDetail
           v-if="detail"

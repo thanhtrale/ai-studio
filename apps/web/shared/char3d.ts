@@ -11,7 +11,9 @@
  * A run records `parent`, the run it took its input from, so a rig reads back
  * to the mesh it was made from and that mesh to its sheet. The review is
  * written by whoever looked at the outputs, never by the runner: a model does
- * not get to grade itself, and neither does the code that ran it.
+ * not get to grade itself, and neither does the code that ran it. The
+ * autopilot (`Char3dAuto`) has a separate local vision model look and write
+ * the review, as `by: "local:<arm>"`.
  *
  * Identifiers and enum values are English; `name`, `notes` and review text are
  * whatever the person typed.
@@ -43,6 +45,29 @@ export interface Char3dCharacter {
   /** What must be kept -- hair, outfit, colours, one-sided details -- in English, for every prompt. */
   traits: string;
   style: string;
+  /**
+   * The body profile (`char3dBody`): true draws the sheet as a chibi figure
+   * whatever the reference's style; false draws a game model with adult
+   * proportions. Absent: keep the reference's own proportions, which for the
+   * hand-made characters were already chibi (and use the chibi defaults).
+   */
+  chibi?: boolean;
+  /** The autopilot's reading of the reference: what to change so it meshes ("remove the ribbon tails"), added to every sheet it draws. */
+  autoExtra?: string;
+  /** The autopilot's reading: long or big hair, which meshes at the finer remesh. */
+  autoLongHair?: boolean;
+  /**
+   * What made this character's rigs fail, as the reviewer saw it on the model
+   * ("the cape edges touch the hands"). Every later sheet and mesh review is
+   * told to look for these first.
+   */
+  autoLessons?: string[];
+  /** Sentences for the sheet prompt that prevent those faults, added to every sheet the autopilot draws. */
+  autoSheetFixes?: string[];
+  /** The traits as first read off the picture, before they were rewritten to agree with `autoSheetFixes`. */
+  autoTraitsOriginal?: string;
+  /** The name is the uploaded file's: the autopilot may replace it with the one it reads off the picture. */
+  nameFromFile?: boolean;
   /** The original reference's file name inside the character's directory. */
   ref: string;
   createdAt: number;
@@ -146,6 +171,8 @@ export interface Char3dSheetSet {
     widthDiff?: number;
     heightDiff?: number;
     ok: boolean;
+    /** Where the front and back figures are widest (the fists), as a share of the height from the top. */
+    pose?: { front?: { handY: number; span: number; gapRows?: number }; back?: { handY: number; span: number; gapRows?: number } };
   };
 }
 
@@ -158,7 +185,72 @@ export interface Char3dDetail {
   character: Char3dCharacter;
   runs: Char3dRun[];
   gallery: Char3dGalleryItem[];
+  auto?: Char3dAuto;
 }
+
+/**
+ * The two ways a character is built. Each step takes its defaults from the
+ * profile (`server/char3d/profiles.ts`): the sheet's proportions, the measured
+ * arm band, the face close-up, the rig's arm space. Stored as `chibi`.
+ */
+export type Char3dBody = 'chibi' | 'game';
+
+export const CHAR3D_BODIES: readonly { value: Char3dBody; label: string; hint: string }[] = [
+  { value: 'chibi', label: 'Chibi', hint: 'Big head, short body, PVC-figure look, whatever the picture’s style.' },
+  { value: 'game', label: 'Game model (real proportions)', hint: 'Adult anime proportions, head about 1/7 of the height, like a gacha game 3D model.' },
+];
+
+export const char3dBody = (character: { chibi?: boolean }): Char3dBody => (character.chibi === false ? 'game' : 'chibi');
+
+/** How the autopilot runs one character from the reference to a rig. */
+export interface Char3dAutoOptions {
+  /** The body profile: true chibi, false game model (`Char3dBody`). */
+  chibi: boolean;
+  /** 0-100: a run passes at or above this, with no criterion below its floor. */
+  passScore: number;
+  /** Sheets to try before giving up. */
+  refTries: number;
+  /** Meshes to try (each passing mesh is rigged; a failed rig spends a mesh try). */
+  meshTries: number;
+  /** The vision arm that writes the prompt and the reviews. */
+  reviewer: string;
+  /** Stop after this step passes instead of going on to the rig. */
+  stopAfter?: Char3dStep;
+}
+
+export type Char3dAutoStage = 'describe' | Char3dStep;
+
+export interface Char3dAutoEvent {
+  at: number;
+  stage: Char3dAutoStage;
+  text: string;
+  run?: string;
+  score?: number;
+  verdict?: Char3dVerdict;
+}
+
+/** One autopilot pass over a character (`<character>/auto.json`). */
+export interface Char3dAuto {
+  /** `interrupted`: the server stopped while it ran. */
+  status: 'running' | 'done' | 'failed' | 'stopped' | 'interrupted';
+  stage?: Char3dAutoStage;
+  options: Char3dAutoOptions;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+  /** The runs that passed, per step. */
+  result?: Partial<Record<Char3dStep, string>>;
+  events: Char3dAutoEvent[];
+  stopRequested?: boolean;
+}
+
+export const CHAR3D_AUTO_DEFAULTS: Char3dAutoOptions = {
+  chibi: true,
+  passScore: 75,
+  refTries: 4,
+  meshTries: 6,
+  reviewer: 'text-qwen3vl-8b-llamacpp',
+};
 
 /** A rigged character saved for the animation review page. */
 export interface Char3dReviewEntry {

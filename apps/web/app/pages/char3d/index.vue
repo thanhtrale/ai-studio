@@ -10,16 +10,18 @@
  * Mixamo clip library. The store is `storage/char3d/`; see
  * `server/char3d/store.ts`.
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
-import type { Char3dCharacterSummary, Char3dClipLibrary, Char3dReviewEntry } from '#shared/char3d';
+import { CHAR3D_BODIES, type Char3dBody, type Char3dCharacterSummary, type Char3dClipLibrary, type Char3dReviewEntry } from '#shared/char3d';
 
 import UiAlert from '../../components/ui/Alert.vue';
 import UiBadge from '../../components/ui/Badge.vue';
 import UiButton from '../../components/ui/Button.vue';
 import UiCard from '../../components/ui/Card.vue';
+import UiCheckbox from '../../components/ui/Checkbox.vue';
 import UiField from '../../components/ui/Field.vue';
 import UiInput from '../../components/ui/Input.vue';
+import UiSelect from '../../components/ui/Select.vue';
 import UiTextarea from '../../components/ui/Textarea.vue';
 
 useHead({ title: '3D' });
@@ -36,6 +38,15 @@ const galleryThumb = (entry: Char3dReviewEntry): string =>
 
 const creating = ref(true);
 const form = reactive({ name: '', subject: 'chibi character', style: 'chibi', traits: '' });
+/** The local vision model writes the prompt and reviews every step; the person only gives the picture. */
+const auto = ref(true);
+/** The body profile: chibi, or a game model with adult proportions. */
+const bodyChoice = ref<Char3dBody>('chibi');
+const bodyHint = computed(() => CHAR3D_BODIES.find((option) => option.value === bodyChoice.value)?.hint);
+watch(bodyChoice, (value) => {
+  form.subject = value === 'chibi' ? 'chibi character' : 'character';
+  form.style = value === 'chibi' ? 'chibi' : 'game model';
+});
 const file = ref<File | null>(null);
 const preview = ref('');
 const failure = ref<string | null>(null);
@@ -55,7 +66,11 @@ async function create(): Promise<void> {
   try {
     const body = new FormData();
     body.append('image', file.value);
-    for (const [key, value] of Object.entries(form)) body.append(key, value);
+    body.append('auto', String(auto.value));
+    body.append('chibi', String(bodyChoice.value === 'chibi'));
+    for (const [key, value] of Object.entries(form)) {
+      if (!auto.value || key === 'name') body.append(key, value);
+    }
     const character = await $fetch<{ id: string }>('/api/char3d', { method: 'POST', body });
     await navigateTo(`/char3d/${character.id}`);
   } catch (error) {
@@ -94,24 +109,35 @@ onBeforeUnmount(() => {
       <h2 v-if="creating" class="text-lg font-semibold">New character</h2>
       <UiCard v-if="creating">
         <form class="space-y-4 p-5" @submit.prevent="create">
+          <div class="flex flex-wrap gap-6">
+            <UiCheckbox
+              v-model="auto"
+              label="Auto (local AI)"
+              hint="Qwen3-VL on this machine reads the picture, writes the prompt, then reviews and scores every sheet, mesh and rig, retrying until one passes."
+            />
+            <div class="w-72">
+              <UiField label="Body" for="c3-body" :hint="bodyHint"><UiSelect id="c3-body" v-model="bodyChoice" :options="CHAR3D_BODIES" /></UiField>
+            </div>
+          </div>
           <div class="flex flex-wrap gap-4">
             <div class="min-w-48 flex-1">
-              <UiField label="Name" for="c3-name" required>
+              <UiField label="Name" for="c3-name" :required="!auto" :hint="auto ? 'Optional: the local AI names it from the picture.' : undefined">
                 <UiInput id="c3-name" v-model="form.name" />
               </UiField>
             </div>
-            <div class="min-w-48 flex-1">
+            <div v-if="!auto" class="min-w-48 flex-1">
               <UiField label="Subject" for="c3-subject" hint="English: it goes into every prompt.">
                 <UiInput id="c3-subject" v-model="form.subject" placeholder="chibi boy" />
               </UiField>
             </div>
-            <div class="w-40">
+            <div v-if="!auto" class="w-40">
               <UiField label="Style" for="c3-style">
                 <UiInput id="c3-style" v-model="form.style" />
               </UiField>
             </div>
           </div>
           <UiField
+            v-if="!auto"
             label="Traits to keep"
             for="c3-traits"
             hint="English. The whole outfit, the colours, and every detail worn on one side — the model draws the hidden views from these words, not from the picture."
@@ -137,7 +163,9 @@ onBeforeUnmount(() => {
           </div>
           <UiAlert v-if="failure" tone="error">{{ failure }}</UiAlert>
           <div class="flex gap-2">
-            <UiButton type="submit" variant="primary" :disabled="saving || !form.name.trim() || !file">Create</UiButton>
+            <UiButton type="submit" variant="primary" :disabled="saving || (!auto && !form.name.trim()) || !file">
+              {{ auto ? 'Create and run' : 'Create' }}
+            </UiButton>
             <UiButton variant="ghost" @click="creating = false">Cancel</UiButton>
           </div>
         </form>

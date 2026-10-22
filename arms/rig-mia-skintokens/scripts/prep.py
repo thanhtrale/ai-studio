@@ -117,7 +117,34 @@ def neck_height(obj) -> float:
     return max(zz for w, zz in rows if w <= 1.1 * wmin)
 
 
-def cut_hanging_hair(obj, lum_max: float) -> tuple[dict, list]:
+def hair_matcher(cfg):
+    """Mặt nào là tóc, theo màu sRGB. Số = ngưỡng độ sáng (tóc TỐI). Dict {"rgb": [r,g,b], "tol": 0,06, "lum": [0,4, 1,8], "back": false} = tóc
+    SÁNG/màu: cùng sắc độ (r,g,b chia tổng, lệch < `tol`) và độ sáng trong `lum` lần màu mẫu — bóng tối/sáng trên lọn tóc giữ sắc độ.
+
+    VÌ SAO (violet-horn-girl-chibi r03, fox-ear-girl-chibi r04–r07): tóc tím/bạc sáng hơn váy đỏ/xám nên ngưỡng độ sáng
+    hoặc không bắt tóc (0,2) hoặc cắt luôn váy (0,7); MIA nhận đuôi tóc là cánh tay, tóc kéo theo tay."""
+    import numpy as np
+
+    if isinstance(cfg, dict):
+        ref = np.asarray(cfg["rgb"], dtype=np.float64)[:3]
+        tol = float(cfg.get("tol", 0.06))
+        lum_lo, lum_hi = (float(x) for x in cfg.get("lum", (0.4, 1.8)))
+        ref_lum = float(0.299 * ref[0] + 0.587 * ref[1] + 0.114 * ref[2])
+        ref_chroma = ref / max(ref.sum(), 1e-6)
+
+        def match(c):
+            c = np.asarray(c, dtype=np.float64)[:3]
+            lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+            if not lum_lo * ref_lum <= lum <= lum_hi * ref_lum:
+                return False
+            return float(np.abs(c / max(c.sum(), 1e-6) - ref_chroma).max()) < tol
+
+        return match
+    lum_max = float(cfg)
+    return lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] < lum_max
+
+
+def cut_hanging_hair(obj, cfg) -> tuple[dict, list]:
     """Bỏ TÓC RỦ dưới cổ khỏi bản để rig: mặt tối (độ sáng màu nền < `lum_max`) LIỀN với vùng tối trên cổ (tóc trên đầu),
     loang qua cạnh chung, chỉ trong các mặt tối; xoá phần loang nằm dưới cổ.
 
@@ -148,7 +175,8 @@ def cut_hanging_hair(obj, lum_max: float) -> tuple[dict, list]:
     above = np.zeros(n, dtype=bool)
     # Vật liệu KHÔNG có texture (tóc đã đúc của `hairfix.py`: một màu, không UV) đọc màu ngay trên vật liệu, đổi
     # linear → sRGB cho cùng thang với điểm ảnh — lấy mẫu atlas theo UV rỗng thì tóc không bị cắt (r14/r16).
-    flat: dict[int, float] = {}
+    is_hair = hair_matcher(cfg)
+    flat: dict[int, bool] = {}
     for i, m in enumerate(obj.data.materials):
         if not (m and m.use_nodes):
             continue
@@ -156,16 +184,16 @@ def cut_hanging_hair(obj, lum_max: float) -> tuple[dict, list]:
         if bsdf is not None and not bsdf.inputs["Base Color"].links:
             c = np.array(bsdf.inputs["Base Color"].default_value[:3], dtype=np.float64)
             c = np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
-            flat[i] = float(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])
+            flat[i] = bool(is_hair(c))
     for f in bm.faces:
         if f.material_index in flat:
-            dark[f.index] = flat[f.material_index] < lum_max
+            dark[f.index] = flat[f.material_index]
             above[f.index] = f.calc_center_median().z >= neck
             continue
         u = sum(l[uvl].uv.x for l in f.loops) / len(f.loops)
         v = sum(l[uvl].uv.y for l in f.loops) / len(f.loops)
         p = px[min(h - 1, max(0, int(v * h))), min(w - 1, max(0, int(u * w)))]
-        dark[f.index] = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2] < lum_max
+        dark[f.index] = is_hair(p)
         above[f.index] = f.calc_center_median().z >= neck
     # Loang theo KHOẢNG CÁCH (tâm mặt cách nhau < 0,006·H), không theo cạnh chung: tóc Pixal3D là nhiều lọn rời và có
     # vệt bóng sáng cắt ngang — loang theo cạnh chỉ bắt được 7,8k/26k mặt tóc dưới cổ (r28).
@@ -183,7 +211,12 @@ def cut_hanging_hair(obj, lum_max: float) -> tuple[dict, list]:
         new = cand[~seen[cand]]
         seen[new] = True
         front = new
-    kill = [bm.faces[i] for i in np.nonzero(seen & ~above)[0]]
+    cut = seen & ~above
+    if isinstance(cfg, dict) and cfg.get("back"):
+        # back=true: chỉ cắt phần SAU thân (glTF +Z trước → Blender −Y trước, +Y sau). Áo cùng màu tóc ở ngực
+        # (violet-horn-girl-game r05: 3,2k đỉnh thân áo tím trước ngực) không bị cắt; lọn tóc rủ trước ngực cũng giữ.
+        cut &= C[:, 1] > np.median(C[:, 1])
+    kill = [bm.faces[i] for i in np.nonzero(cut)[0]]
     pts = list({tuple(v.co) for f in kill for v in f.verts})
     stats = {"neckFrac": round((neck - min(v.co.z for v in bm.verts)) / H, 3), "darkFaces": int(dark.sum()), "cutFaces": len(kill)}
     bmesh.ops.delete(bm, geom=kill, context="FACES_ONLY")
@@ -229,10 +262,10 @@ def main() -> int:
         new.data = orig.data.copy()
         new.name = "prep"
         bpy.context.scene.collection.objects.link(new)
-        # hairCut: số = ngưỡng độ sáng (mặc định 0,2); false = tắt. Cắt trên bản sao TRƯỚC khi bỏ vật liệu (cần texture).
+        # hairCut: số = ngưỡng độ sáng (mặc định 0,2); dict {rgb, tol} = theo màu tóc (`hair_matcher`); false = tắt. Cắt trên bản sao TRƯỚC khi bỏ vật liệu (cần texture).
         hair_cfg = job.get("hairCut", 0.2)
         if hair_cfg is not False and hair_cfg is not None:
-            hs, hpts = cut_hanging_hair(new, float(hair_cfg))
+            hs, hpts = cut_hanging_hair(new, hair_cfg if isinstance(hair_cfg, dict) else float(hair_cfg))
             stats["hairCut"] = hs
             if hpts:
                 import numpy as np

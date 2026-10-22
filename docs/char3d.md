@@ -37,6 +37,129 @@ runner), `apps/web/app/pages/char3d/`, `apps/web/app/components/char3d/`.
 - `/char3d/review` is laid out like Mixamo: saved characters on the left, the
   clip library as animated cards in the middle, the viewer on the right.
 
+## Two bodies: chibi or game model
+
+Chosen on the New character form and the autopilot panel (**Body**), stored as
+`chibi` on the character (true chibi, false game model, absent = the
+reference's own proportions, for characters made before the choice). Every
+step takes its defaults from the profile in `server/char3d/profiles.ts`; a
+run's own config still wins, and rig defaults are written into run.json.
+
+| | chibi | game model |
+|---|---|---|
+| sheet `{proportions}` | redraw as a chibi PVC figure | adult anime game-model proportions, head ~1/7 of the height, NOT chibi |
+| arm band (`handY`, autopilot) | 0.53–0.61 (measured, chibi-martial-girl) | 0.42–0.50 (jade-hanfu-girl r01/r02 only) |
+| face close-up `faceFromTop` | 0.36 (render.py default) | 0.08 |
+| rig `armSpace` | 30° (rig.py default) | 0 — Mixamo clips are made for adult proportions; not yet measured |
+| local reviewer | "Chibi proportions" | "Adult proportions" |
+
+The game-model numbers come from one character (jade-hanfu-girl,
+2026-10-21); widen them as more are measured. `headTarget` needs no profile:
+the head shrink only ever shrinks (a 1/7 head is left alone).
+
+## Autopilot: a local vision model in the person's place
+
+New character with **Auto (local AI)** checked (the default), or **Run
+autopilot** on a character's page: the person gives only the picture.
+`server/char3d/autopilot.ts` drives, `autoPrompts.ts` holds the rubric;
+the reviewer is `text-qwen3vl-8b-llamacpp` (Qwen3-VL 8B, `text.vision`; the
+Gemma 4 arm takes no images in a job). State: `<character>/auto.json`, shown
+as a log on the page.
+
+1. **Describe** (only a character with no traits): the model reads the
+   reference → `subject`, `traits` (worn, never held — sentences with
+   hold/grip/wield are dropped in code), `simplify` (only: remove held items
+   and long thin hanging parts, shorten a cape below the knees to the hip,
+   bangs above the brows; armour, fur, pauldrons stay), `longHair`.
+   **Chibi model** (default on) swaps the sheet prompt's "same proportions as
+   `<image1>`" for "redraw as a chibi figure whatever the style, PVC-figure
+   sculpted locks" — a photo or a realistic splash art comes out chibi.
+2. **Sheet**, up to `refTries`: a sheet that does not cut into three figures
+   is refused unasked; otherwise the model scores identity / chibi / views /
+   pose / buildable on the original + the three cut views, and the
+   cross-check is a measured criterion (width ≤ 5 % → 10, ≤ 10 % → 7,
+   ≤ 20 % → 5; heights ≤ 3 % → 10), not a gate: Arthur's cape flares in front
+   and hangs straight behind, 9–21 % wider in front on sheets that scored
+   91–93 (honeyview-arthur-1 r03–r05). Its `fix` sentence goes into the next
+   try's prompt.
+   **The arm angle is measured, not asked**: `split_sheet.py` records where
+   the front and back figures are widest between 15 % and 75 % of their
+   height (`check.pose.*.handY`, the fists). Rigs that worked: 0.565–0.587
+   (chibi-martial-girl r03/r20/r26/r40); arms hanging onto a cape 0.61–0.75
+   (arthur r04/r05); a near T-pose with the profile's arm pointing forward
+   0.31 (arthur r12). Qwen3-VL scored the pose of every one of those 8–10.
+   Wanted 0.53–0.61 → 10; 0.03 out → 7; 0.07 → 4 (under the floor).
+3. **Mesh**, up to `meshTries`, a random seed each (`remeshResolution 1024,
+   targetFaces 400000` for long hair): scored on the sheet + `sheet_tex` +
+   `sheet_clay` + `face_front`. A face scored < 8 that the model calls a
+   snout gets one re-texture with `faceFix`.
+   **Arms hang free** (weight 3, floor 6) is decided by a separate question
+   on the four `detail_sleeve_*` close-ups alone: on the whole sheets the 8B
+   model said "no" to Arthur's fists gripping the cape edge (r07, r09 passed
+   at 94/95 and both rigs tore the cape) and "yes" to the girl's free fists
+   (r45). The arm's own sleeve does not count.
+4. **Rig** of each passing mesh (`prep.hairCut` only when `longHair`: on
+   white hair with a black blindfold and coat it flooded into the coat and cut
+   144K of 399K faces, blindfold-lightning-warrior r05): the model scores deformation / joints / hair
+   and clothes on `rest_bones` + the Walk, Jump, Dance sheets, plus two
+   measured criteria — stretch (edges > 2× over 1 % is under the floor) and
+   hands in the body. A failed rig spends a mesh try.
+5. **What a failed rig teaches** (`autoPrompts.ts` `RIG_FAULTS`): asked for
+   "the cause" in its own words the model copied the prompt's example (hair
+   on the shoulder, for a short-haired knight); it picks well from a list —
+   `cloth_arms`, `hair_body`, `arms_torso`, `hem_legs` — looking at the
+   standing mesh's clay and close-ups. The pick becomes a lesson on the
+   character (`autoLessons`: every later sheet and mesh review is told to look
+   for it, and a mesh that shows it has that criterion capped at 4) and a
+   sentence written here for the sheet prompt (`autoSheetFixes`). A sheet
+   without every learnt sentence is not reused; the same fault on two meshes
+   of one sheet is also put down to the sheet. Word the sentences with the
+   angle: "arms raised well clear of the cape" drew r12's near T-pose.
+
+**A long cape (honeyview-arthur-1, open).** The person accepts a long cape as
+long as it does not stick to the body. What was measured:
+- Turbo draws the cape `<image1>` has, whatever the prompt or the traits say:
+  "a SHORT shoulder cape" (r24–r27) drew the long one every time. The traits
+  are now rewritten to agree with what was learnt (`autoTraitsOriginal`
+  keeps the first reading), but the picture still wins.
+- The sheet can have the A-pose with the cape behind the back (r19: fists at
+  0.60, arm gap 0.19/0.20), and the meshes still weld the cape's front flaps
+  to the fists: three seeds of r19 (r20–r22), all failed "arms hang free".
+  The back view's arm gap is always small with a long cape behind the arms.
+- `clothFix` (rig.py, off by default): a vertex dominated by an arm/leg bone
+  whose straight line to that bone crosses another surface, and that is
+  further than 1.6× (arm) / 1.4× (leg) the bone's median distance, is cloth;
+  parts under 0.5 % of the welded mesh are dropped (armour plates), the rest
+  grows over neighbours far from their own bone, and cloth goes to the
+  nearest spine bones plus an even share of both thighs below the hips. The
+  mask is right (`rig/cloth.glb`: cape back, flap insides, between the legs;
+  fists and shoes untouched) but on r10's prediction it rigs worse — Jump p99
+  2.88 → 3.36, hand-in-body frames 1 → 31 (r30–r34) — because a flap welded
+  to a fist is one piece of mesh: a thin string stretches from the fist to the
+  flap. Cutting that weld in the mesh is the open step.
+
+**Run again resumes**: the best passing sheet is used instead of drawing a new
+one, and passing meshes with no rig yet are rigged before any new mesh. The
+autopilot lives in the web server process: in development any edit under
+`server/` — and `npm run typecheck`, whose `nuxt prepare` removes
+`.nuxt/dist` — restarts it, the run in flight errors as interrupted and the
+autopilot reads `interrupted`. Typecheck with `npx vue-tsc --build` while it
+runs, and press Run again after a restart.
+
+The model gives one 0–10 per criterion; the weights, floors and the pass mark
+(75) are code, so a lenient answer moves a criterion, not the verdict.
+Reviews are written as `by: "local:<arm>"` and feed the gallery like any
+other. `POST /api/char3d/<id>/runs/<run>/local-review {save:false}` scores
+one run without writing — how the rubric was calibrated.
+
+**Calibration against the hand reviews (chibi-martial-girl, 2026-10-20):**
+pass/not-pass agreed on refs 3/4 (r24's split failed its cross-check; it was
+68 by hand), meshes 7/8 (r35, 72 by hand, passed at 81), rigs 5/6 (r08's side
+lock dragged across the chest, 68 by hand, is too subtle for 8B: 93). Whole
+sheets confused it — it reported a correct left profile as wrong and a face
+on the back view; the three cut views as separate images fixed that. Each
+review is 6–13 s once the arm is loaded.
+
 ## Store
 
 `storage/char3d/<character>/` — `character.json` (profile, gallery, notes
@@ -205,7 +328,12 @@ it off.
   (colour streaks in the hair, the gold hairpin shapeless, a pink face).
   `textureSteps` 12 → 24 on the same seed (r61): the same shape, another draw
   of the texture — no fix. Shape and texture separate; the shape is good.
-- Cameras: azimuth known (±180° chosen by IoU), orthographic or perspective
+- Cameras: azimuth known up to ONE 180° flip for the whole set (Pixal3D may
+  turn the mesh round; then every view turns), chosen by the summed IoU of all
+  views — the profile is asymmetric and decides it — and by the old texture's
+  colour when the sums are within 0.02 per view. Per-view choice put
+  jade-hanfu-girl r03's FRONT image at 180° (bob hair, A-pose: front/back IoU
+  0.92/0.89), painting the back of the head over the face. Orthographic or perspective
   chosen by silhouette IoU — r43: IoU 0.88/0.90/0.92.
 - Without optical flow: hair strands pick up skin colour, cheeks hair colour
   (a few px off). DIS flow median 7–15 px, clipped at 15 px.

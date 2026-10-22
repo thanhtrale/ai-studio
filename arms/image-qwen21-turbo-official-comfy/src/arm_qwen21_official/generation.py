@@ -307,6 +307,20 @@ def _await_prompt(server: ComfyServer, prompt_id: str) -> dict[str, Any]:
 
 
 def _submit(server: ComfyServer, graph: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _submit_once(server, graph)
+    except ChildFailed as error:
+        # A resident ComfyUI keeps what earlier jobs loaded; on a 16 GB card the
+        # 2048x1024 sheet then fails with CUDA out of memory while PyTorch itself
+        # holds 0.6 GiB (char3d, 2026-10-22: five sheets). Unload and run it once more.
+        if "out of memory" not in str(error).lower():
+            raise
+        server.post("/free", {"unload_models": True, "free_memory": True})
+        time.sleep(3.0)
+        return _submit_once(server, graph)
+
+
+def _submit_once(server: ComfyServer, graph: dict[str, Any]) -> dict[str, Any]:
     prompt_id = str(uuid.uuid4())
     submitted = server.post("/prompt", {"prompt": graph, "prompt_id": prompt_id})
     node_errors = submitted.get("node_errors") if isinstance(submitted, dict) else None

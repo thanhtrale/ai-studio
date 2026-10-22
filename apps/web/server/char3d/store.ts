@@ -168,6 +168,7 @@ export interface NewCharacter {
   subject?: string;
   traits?: string;
   style?: string;
+  chibi?: boolean;
   image: Buffer;
   filename?: string;
 }
@@ -189,6 +190,7 @@ export async function createCharacter(storageDir: string, body: NewCharacter): P
     subject: String(body.subject ?? '').trim() || 'character',
     traits: String(body.traits ?? '').trim(),
     style: String(body.style ?? '').trim() || 'chibi',
+    ...(body.chibi !== undefined ? { chibi: body.chibi } : {}),
     ref: `ref${extension}`,
     createdAt: Date.now(),
     notes: [],
@@ -208,6 +210,7 @@ export async function patchCharacter(
   for (const key of ['name', 'subject', 'traits', 'style'] as const) {
     if (typeof body[key] === 'string') character[key] = body[key].trim();
   }
+  if (typeof body['chibi'] === 'boolean') character.chibi = body['chibi'];
   if (typeof body['note'] === 'string' && body['note'].trim()) {
     (character.notes ??= []).push({ at: Date.now(), text: body['note'].trim() });
   }

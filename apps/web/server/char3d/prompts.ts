@@ -14,6 +14,8 @@
 
 import type { Char3dCharacter, Char3dView } from '#shared/char3d';
 
+import { sheetProportions } from './profiles';
+
 export const REF_PROMPT_VERSION = 'v3';
 
 // v2: a WIDE A-pose, about 50 degrees. v1 (35) let wide sleeves hang against
@@ -46,7 +48,7 @@ export const DEFAULT_REF_PROMPTS: Record<Char3dView, string> = {
 // draws the hidden side from the words, not from the image. `{extra}` is this
 // run's own change ("remove the long hanging ribbon tails").
 export const SHEET_PROMPT =
-  'Character turnaround reference sheet of the {subject} from <image1>, EXACTLY THREE full-body figures of the SAME character side by side (three figures only, never a fourth) on one plain pure white canvas, evenly spaced, not overlapping, left to right: (1) FRONT view facing the camera, (2) exact LEFT side profile facing the left edge of the image, (3) BACK view seen from directly behind. All three views share exactly the same pose, the same height and scale, the tops of the heads on one line and the soles of the shoes on one baseline. Pose in every view: standing straight, legs straight and feet a little apart, wide A-pose with both arms straight and raised about 45 degrees away from the body (in the side profile the face looks toward the left edge of the image and the near arm points toward the camera, so it looks short and foreshortened, NOT stretched forward), clear empty space between the arms and the torso, both hands closed into loose fists. Outfit exactly as <image1>{traits}.{extra} Details worn on one side stay on that side of the body, so from behind they appear mirrored in the image. The sleeves keep exactly the shape and length of <image1>, with no skin visible inside the sleeves. Same face, same colors and the same chibi proportions with a big head and short body as <image1>. Orthographic-looking straight camera at chest height, no perspective distortion, flat even lighting, no cast shadow, no floor, no text, no labels, no other characters.';
+  'Character turnaround reference sheet of the {subject} from <image1>, EXACTLY THREE full-body figures of the SAME character side by side (three figures only, never a fourth) on one plain pure white canvas, evenly spaced, not overlapping, left to right: (1) FRONT view facing the camera, (2) exact LEFT side profile facing the left edge of the image, (3) BACK view seen from directly behind. All three views share exactly the same pose, the same height and scale, the tops of the heads on one line and the soles of the shoes on one baseline. Pose in every view: standing straight, legs straight and feet a little apart, wide A-pose with both arms straight and raised about 45 degrees away from the body (in the side profile the face looks toward the left edge of the image and the near arm points toward the camera, so it looks short and foreshortened, NOT stretched forward), clear empty space between the arms and the torso, both hands closed into loose fists. Outfit exactly as <image1>{traits}.{extra} Details worn on one side stay on that side of the body, so from behind they appear mirrored in the image. The sleeves keep exactly the shape and length of <image1>, with no skin visible inside the sleeves. {proportions} Orthographic-looking straight camera at chest height, no perspective distortion, flat even lighting, no cast shadow, no floor, no text, no labels, no other characters.';
 
 /** The canvas the sheet is drawn on. 1536x1024 fits three figures but spreads the front's hands (4/4). */
 export const SHEET_SIZE = { width: 2048, height: 1024 } as const;
@@ -62,10 +64,15 @@ export function fillRefPrompt(template: string, character: Pick<Char3dCharacter,
     .replaceAll('{traits}', traits ? ` (${traits})` : '');
 }
 
-export function fillSheetPrompt(character: Pick<Char3dCharacter, 'subject' | 'traits'>, extra: string): string {
+/** `{proportions}` comes from the character's body profile (`profiles.ts`). */
+export function fillSheetPrompt(
+  character: Pick<Char3dCharacter, 'subject' | 'traits' | 'chibi'>,
+  extra: string,
+): string {
   const traits = trimEnd(character.traits);
   const change = trimEnd(extra);
   return SHEET_PROMPT.replaceAll('{subject}', character.subject || 'character')
+    .replaceAll('{proportions}', sheetProportions(character))
     .replaceAll('{traits}', traits ? `: ${traits}` : '')
     .replaceAll('{extra}', change ? ` ${change}.` : '');
 }

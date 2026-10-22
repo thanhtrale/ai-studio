@@ -80,9 +80,13 @@ RIG_OPTIONS: dict[str, tuple[type, ...]] = {
     "armSpace": (int, float),
     "torsoClear": (bool,),
     "kneeRaise": (int, float),
+    "elbowFix": (bool, int, float, dict),
     "sleeveSkinFix": (bool, int, float),
     "faceFromRef": (bool,),
     "canonical": (bool,),
+    "clothFix": (bool, dict),
+    "capeBack": (bool, int, float, dict),
+    "rigidHead": (bool, dict),
 }
 REST_POSES = ("A-pose", "T-pose", None)
 WEIGHT_MODES = ("skintokens", "heat", "mia")

@@ -42,6 +42,7 @@ import {
   SHEET_SIZE,
   VIEW_SIZE,
 } from './prompts';
+import { profileOf } from './profiles';
 import { collectOut, outRel, stageIn } from './staging';
 import {
   charDir,
@@ -107,6 +108,9 @@ const RIG_OPTIONS = [
   'sleeveSkinFix',
   'faceFromRef',
   'canonical',
+  'clothFix',
+  'capeBack',
+  'rigidHead',
 ];
 
 /**
@@ -228,6 +232,10 @@ async function normalise(
   }
 
   config['arm'] ||= RIG_ARM_DEFAULT;
+  // The body profile's rig defaults, written into the run so run.json says what it used.
+  for (const [key, value] of Object.entries(profileOf(character).rig)) {
+    if (config[key] === undefined) config[key] = value;
+  }
   if (!config['mesh'] || !existsSync(charFile(storageDir, id, String(config['mesh'])))) {
     bad('config.mesh must point at a GLB of this character');
   }
@@ -501,6 +509,7 @@ async function execute(storageDir: string, caller: Char3dCaller, id: string, run
           outputs['basecolor'] = rel(map(String(report.result['basecolor'])));
           outputs['reproject'] = {
             views: report.result['views'],
+            flip: report.result['flip'],
             texels: report.result['texels'],
             hair: report.result['hair'],
             lum: report.result['lum'],
@@ -648,12 +657,14 @@ async function execute(storageDir: string, caller: Char3dCaller, id: string, run
 
   /** Check renders of a mesh or a rig, on the tools arm. Their own timing, under `renders`. */
   async function render(glb: string, mode: 'turntable' | 'anim'): Promise<Record<string, unknown>> {
+    // The face close-ups are framed by the body profile (chibi 36 % down from the top, game model 8 %).
+    const profile = profileOf(await getCharacter(storageDir, id));
     const report = await job<ToolReport>(TOOLS_ARM, mode === 'anim' ? 'Render clips' : 'Render turntable', {
       task: 'render',
       glb: await stageIn(storageDir, id, glb),
       outDir: outRel(id, runId, 'renders'),
       mode,
-      options: { res: mode === 'anim' ? 512 : 768, frames: 8 },
+      options: { res: mode === 'anim' ? 512 : 768, frames: 8, ...profile.render },
     });
     const map = await collectOut(storageDir, id, runId);
     timing[`render-${mode}`] = timingOf(report);

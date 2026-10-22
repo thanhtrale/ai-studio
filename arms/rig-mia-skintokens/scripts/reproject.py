@@ -132,6 +132,24 @@ def fit_camera(V, F, mask, az):
     return best
 
 
+def colour_err(pos, nrm, old, img, mask, az, fit):
+    """Sai khác màu trung bình giữa texture cũ của Pixal3D và ảnh góc, nếu camera đặt ở `az` (không xét che khuất).
+    Dùng khi bóng trước/sau gần như đối xứng: nhân vật tỉ lệ người thật, tóc bob, A-pose — IoU hai phía chênh
+    < 0,01, jade-hanfu-girl r03 chọn az 180 cho ảnh MẶT TRƯỚC, chiếu mặt lên gáy và gáy lên mặt."""
+    _, dist, sc, cx, cy = fit
+    c, _ = cam_axes(az)
+    sel = np.nonzero(nrm[::7] @ c > 0.3)[0] * 7
+    px, py = project(pos[sel], az, dist, sc, cx, cy)
+    S = img.shape[0]
+    xi, yi = px.round().astype(int), py.round().astype(int)
+    inb = (xi >= 0) & (xi < S) & (yi >= 0) & (yi < S)
+    sel, xi, yi = sel[inb], xi[inb], yi[inb]
+    keep = mask[yi, xi]
+    if not keep.any():
+        return 1.0
+    return float(np.abs(old[sel[keep]] - img[yi[keep], xi[keep]]).mean())
+
+
 def replace_basecolor(src: str, dst: str, png: bytes) -> None:
     """Thay bytes ảnh base color (vật liệu đầu) trong GLB, dời offset các bufferView. Không đụng thứ gì khác."""
     b = open(src, "rb").read()
@@ -188,16 +206,32 @@ def reproject(job: dict) -> dict:
     acc = np.zeros((len(ty), 3))
     wsum = np.zeros(len(ty))
     stats: dict[str, dict] = {}
-    for vi, (name, path) in enumerate(job["views"].items()):
+    # Mesh Pixal3D có thể quay 180° — khi đó MỌI góc cùng quay, nên chọn MỘT lần cho cả bộ (flip 0 hay 180), không
+    # từng góc: jade-hanfu-girl r03 (tỉ lệ người thật, tóc bob) — bóng trước/sau gần đối xứng, IoU riêng góc trước
+    # chọn az 180 (0,92 vs 0,89) → mặt lấy màu gáy. Bóng góc nghiêng thì bất đối xứng (0,96) và kéo cả bộ về đúng.
+    loaded = []
+    for name, path in job["views"].items():
         if name not in AZ:
             continue
         img = np.asarray(Image.open(path).convert("RGB")).astype(np.float32) / 255
-        S = img.shape[0]
         full = img.max(2) > 0.02
         full = cv2.morphologyEx(full.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)).astype(bool)
         inner = cv2.erode(full.astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool)
-        cands = sorted((fit_camera(V, F, full, az) + (az,) for az in (AZ[name], (AZ[name] + 180) % 360)), key=lambda x: -x[0])
-        iou, dist, sc, cx, cy, az = cands[0]
+        fits = {flip: fit_camera(V, F, full, (AZ[name] + flip) % 360) for flip in (0, 180)}
+        loaded.append((name, img, full, inner, fits))
+    total = {flip: sum(v[4][flip][0] for v in loaded) for flip in (0, 180)}
+    flip = max(total, key=total.get)
+    side: dict = {"by": "iou", "iou": {k: round(v, 3) for k, v in total.items()}}
+    # Tổng IoU vẫn sát nhau (mọi góc đều đối xứng) → chọn theo màu texture cũ (mặt là da, gáy là tóc).
+    if abs(total[0] - total[180]) < 0.02 * len(loaded):
+        err = {f: sum(colour_err(pos, nrm, old, v[1], v[3], (AZ[v[0]] + f) % 360, v[4][f]) for v in loaded) for f in (0, 180)}
+        flip = min(err, key=err.get)
+        side = {"by": "colour", "iou": side["iou"], "err": {k: round(v, 3) for k, v in err.items()}}
+    flip_stats = {"deg": flip, **side}
+    for vi, (name, img, full, inner, fits) in enumerate(loaded):
+        S = img.shape[0]
+        az = (AZ[name] + flip) % 360
+        iou, dist, sc, cx, cy = fits[flip]
         c, _ = cam_axes(az)
         if dist is None:
             dirs = np.repeat(c[None], len(ty), 0)
@@ -287,22 +321,32 @@ def reproject(job: dict) -> dict:
         n_cc, lab = connected_components(coo_matrix((np.ones(len(adj)), (adj[:, 0], adj[:, 1])), shape=(nf, nf)), directed=False)
         sizes = np.bincount(lab[dark], minlength=n_cc)
         big = sizes > 0.02 * max(int(dark.sum()), 1)
+        # Tóc mọc từ đỉnh đầu: chỉ mảng tối chạm tới 8 % trên cùng của chiều cao. Không có điều kiện này, mọi mảng
+        # tối lớn đều bị coi là tóc — quần navy (inosuke-boar-mask r02), cổ lông xám của cô gái tóc bạc
+        # (fox-ear-girl r02, cả hai bản) thành đen. Tóc sáng (bạc, trắng) không tối → không mảng nào chạm đỉnh → bỏ qua.
+        fy = V[F].mean(1)[:, 1]
+        top = np.full(n_cc, -np.inf)
+        np.maximum.at(top, lab[dark], fy[dark])
+        big &= top >= V[:, 1].max() - 0.08 * H
         hair_f = dark & big[lab]
         emit("step", stage="hair", i=4, of=5, darkFaces=int(dark.sum()), parts=int(big.sum()), top=[int(x) for x in np.sort(sizes)[::-1][:5]])
         ht = hair_f[ff]
-        c = newc[ht]
-        grey = c.mean(1, keepdims=True)
-        # Độ sáng: ảnh vào (đã tách nền, tóc anime tô sáng) cho tóc trung vị ~0,37 → lên 3D thành XÁM XI MĂNG, đốm
-        # sáng thành mốc trắng (người dùng chê r65). Tóc Pixal3D của cậu bé: trung vị 0,12. Dời trung vị về
-        # `hairLum`, giữ chênh lệch sợi, chặn đỉnh 0,3.
-        target = float(job.get("hairLum", 0.13))
-        med = float(np.median(grey))
-        dv = grey - med
-        dv[dv > 0.15] = 0  # điểm sáng lạc (da/nền chiếu lệch lên sợi tóc) → về màu tóc
-        g2 = np.clip(target + dv, 0.02, 0.3)
-        newc[ht] = g2 + (c - grey) * desat * (g2 / np.maximum(grey, 1e-3))
-        hair_stats = {"faces": int(hair_f.sum()), "texels": int(ht.sum()), "chroma": desat, "lumFrom": round(med, 3), "lumTo": target,
-                      "meanRGB": [int(x) for x in (newc[ht].mean(0) * 255).round()]}
+        if not ht.any():
+            hair_stats = {"faces": 0, "texels": 0, "note": "no dark region reaches the top of the head"}
+        else:
+            c = newc[ht]
+            grey = c.mean(1, keepdims=True)
+            # Độ sáng: ảnh vào (đã tách nền, tóc anime tô sáng) cho tóc trung vị ~0,37 → lên 3D thành XÁM XI MĂNG, đốm
+            # sáng thành mốc trắng (người dùng chê r65). Tóc Pixal3D của cậu bé: trung vị 0,12. Dời trung vị về
+            # `hairLum`, giữ chênh lệch sợi, chặn đỉnh 0,3.
+            target = float(job.get("hairLum", 0.13))
+            med = float(np.median(grey))
+            dv = grey - med
+            dv[dv > 0.15] = 0  # điểm sáng lạc (da/nền chiếu lệch lên sợi tóc) → về màu tóc
+            g2 = np.clip(target + dv, 0.02, 0.3)
+            newc[ht] = g2 + (c - grey) * desat * (g2 / np.maximum(grey, 1e-3))
+            hair_stats = {"faces": int(hair_f.sum()), "texels": int(ht.sum()), "chroma": desat, "lumFrom": round(med, 3), "lumTo": target,
+                          "meanRGB": [int(x) for x in (newc[ht].mean(0) * 255).round()]}
     # ai-studio: the sheet is flat anime colour, drawn LIGHTER than the original (chibi-martial-girl r05:
     # pink L 75 after projection vs 71 in the original, 67 on Pixal3D's own atlas; non-hair median 72 vs 62)
     # and with no shading -- in a viewer that read as washed white and chalky, "a plaster statue". So the
@@ -339,7 +383,7 @@ def reproject(job: dict) -> dict:
     bc = str(dst)[:-4] + "_basecolor.png"
     open(bc, "wb").write(buf.getvalue())
     emit("step", stage="write", i=5, of=5)
-    return {"path": dst, "basecolor": bc, "views": stats,
+    return {"path": dst, "basecolor": bc, "views": stats, "flip": flip_stats,
             "hair": hair_stats, "lum": lum_stats, "texels": {"total": int(len(ty)), "projected": int((wsum > 0).sum()), "mappedFar": int((far[:, 0] > 0.5).sum())}}
 
 

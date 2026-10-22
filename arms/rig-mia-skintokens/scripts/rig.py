@@ -30,6 +30,10 @@ Vào (một dòng JSON trên stdin):
   rigidHand    bàn tay một khối qua cổ tay (mặc định = noFingers) — `rigid_hand`
   armSpace     độ đẩy cánh tay ra xa thân trong clip (độ; mặc định 30; 0 = giữ clip gốc) — `arm_space`
   torsoClear   né thân: xoay cánh tay ra khi bàn tay lọt thân, từng khung (mặc định true) — `TorsoClearance`
+  clothFix     vải buông (áo choàng, vạt dài) theo thân, không theo tay/chân cạnh nó (mặc định false; dict = tham số) — `cloth_fix`
+  rigidHead    cả khối đầu (mặt, cằm, tóc trên đầu) theo Head 100%, trộn quanh cằm, bỏ qua giáp vai (true = mặc định; dict = {top, start, width, armCut→arm_cut}) — `rigid_head`
+  capeBack     áo choàng sau vai theo lưng, không theo tay: đỉnh nằm sau xương tay quá k·H (true = 0,045; số = k; dict = {k, ramp}; mặc định tắt) — `cape_back`
+  elbowFix     đặt lại khuỷu khi bắp tay/cẳng tay lệch tỉ lệ (mặc định true; số = frac; dict = {frac, lo, hi}; false = tắt) — `elbow_fix`
   kneeRaise    nâng khớp gối dọc xương đùi, tính bằng phần của quãng hông → cổ chân (0,05 = 5%; mặc định 0) — `knee_raise`
   sleeveSkinFix tô lại màu da lọt lên mặt tay áo (true = ngưỡng 0,032·H, số = ngưỡng; mặc định tắt) — `sleeve_skin_fix`
   faceFromRef  chiếu mặt từ `mesh_views/front.png` (cạnh mesh vào) thẳng lên texture (mặc định tắt) — `face_from_ref`
@@ -956,6 +960,39 @@ def knee_raise(db, idx: dict[str, int], frac: float) -> dict:
     return out
 
 
+def elbow_fix(db, idx: dict[str, int], frac: float = 0.5, lo: float = 0.75, hi: float = 1.3) -> dict:
+    """Đặt lại khớp khuỷu (LeftForeArm/RightForeArm) khi bắp tay trên / cẳng tay lệch khỏi [`lo`, `hi`]: khuỷu mới ở
+    `frac` chiều dài đường vai → khuỷu → cổ tay (giữ nguyên độ gập cũ). Vai và cổ tay giữ nguyên. Chạy TRƯỚC trọng số.
+
+    VÌ SAO (người dùng, 2026-10-22: "rig sai khớp tay"): MIA đặt khuỷu sát vai trên tay áo rộng/loe — fox-ear-girl-game
+    r10 bắp tay 0,074·H, cẳng tay 0,164·H (tỉ lệ 0,45); fox-ear-girl-chibi r13 0,37/0,30; crimson-armor-man-chibi r06
+    0,49 / 2,06 (hai bên lệch nhau); crimson-armor-man-game r04 0,85 / 1,38. Các rig người dùng không chê: 0,72–1,14,
+    hai bên gần nhau. Tay gập ở giữa bắp tay trông như gãy.
+    """
+    import numpy as np
+
+    J = np.asarray(db.joints, dtype=np.float32).copy()
+    T = np.asarray(db.joints_tail, dtype=np.float32).copy()
+    out: dict = {"frac": frac, "range": [lo, hi]}
+    for side in ("Left", "Right"):
+        k = {n: idx.get(f"mixamorig:{side}{n}") for n in ("Arm", "ForeArm", "Hand")}
+        if any(v is None for v in k.values()):
+            continue
+        sh, el, wr = J[k["Arm"]], J[k["ForeArm"]], J[k["Hand"]]
+        a, b = float(np.linalg.norm(el - sh)), float(np.linalg.norm(wr - el))
+        ratio = a / max(b, 1e-9)
+        row = {"before": round(ratio, 3)}
+        if not lo <= ratio <= hi:
+            L = (a + b) * frac
+            new = sh + (el - sh) / max(a, 1e-9) * L if L <= a else el + (wr - el) / max(b, 1e-9) * (L - a)
+            T[k["Arm"]] += new - el
+            J[k["ForeArm"]] = new
+            row["after"] = round(float(np.linalg.norm(new - sh)) / max(float(np.linalg.norm(wr - new)), 1e-9), 3)
+        out[side] = row
+    db.joints, db.joints_tail = J, T
+    return out
+
+
 def sleeve_skin_fix(arm_obj, mesh_obj, dmin: float = 0.032) -> dict:
     """Tô lại texel MÀU DA nằm trên MẶT TAY ÁO bằng màu vải quanh đó. Sửa ảnh base color tại chỗ (đã pack).
 
@@ -979,11 +1016,13 @@ def sleeve_skin_fix(arm_obj, mesh_obj, dmin: float = 0.032) -> dict:
                 img = nd.image
     if img is None:
         return {"skipped": "no base color image"}
-    me = mesh_obj.data
+    # `geom`: lấy hình học/UV từ object khác (mesh gốc, cùng UV), ghi màu vào ảnh của `mesh_obj`.
+    g = geom or mesh_obj
+    me = g.data
     n = len(me.vertices)
     co = np.empty(n * 3)
     me.vertices.foreach_get("co", co)
-    Mw = np.array(mesh_obj.matrix_world)
+    Mw = np.array(g.matrix_world)
     co = co.reshape(-1, 3) @ Mw[:3, :3].T + Mw[:3, 3]
     H = float(np.ptp(co[:, 2]))
     A = arm_obj.matrix_world
@@ -1061,7 +1100,7 @@ FACE_FACING = (0.05, 0.3)
 FACE_TOP = (0.2, 0.32)
 
 
-def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0) -> dict:
+def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0, geom=None) -> dict:
     """Chiếu MẶT từ ảnh front (đúng ảnh Pixal3D nhận, `mesh_views/front.png`) thẳng lên base color.
 
     VÌ SAO: Pixal3D không chép mặt từ ref mà tô lại theo seed — cùng một ảnh vào (r121, mắt tròn có đốm
@@ -1095,11 +1134,13 @@ def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0) -> dict:
     ys, xs = np.nonzero(sil_img)
     ib = np.array([xs.min(), ys.min(), xs.max(), ys.max()], float)
 
-    me = mesh_obj.data
+    # `geom`: lấy hình học/UV từ object khác (mesh gốc, cùng UV), ghi màu vào ảnh của `mesh_obj`.
+    g = geom or mesh_obj
+    me = g.data
     n = len(me.vertices)
     co = np.empty(n * 3)
     me.vertices.foreach_get("co", co)
-    Mw = np.array(mesh_obj.matrix_world)
+    Mw = np.array(g.matrix_world)
     co = co.reshape(-1, 3) @ Mw[:3, :3].T + Mw[:3, 3]
     me.calc_loop_triangles()
     nt = len(me.loop_triangles)
@@ -1125,7 +1166,15 @@ def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0) -> dict:
     nlab, lab, cst, _ = cv2.connectedComponentsWithStats(skin.astype(np.uint8))
     if nlab < 2:
         return {"skipped": "no skin region in front view"}
-    face = (lab == 1 + int(np.argmax(cst[1:, cv2.CC_STAT_AREA]))).astype(np.uint8)
+    # Mặt = mảng da CAO NHẤT trong các mảng đủ lớn, tâm gần trục giữa người — không phải mảng lớn nhất: áo hở vai thì
+    # vai/ngực lớn hơn mặt (fox-ear-girl-game r13: chọn nhầm vai trái, faceBox 41×67 px ở x 560, mặt không đổi).
+    area = cst[1:, cv2.CC_STAT_AREA].astype(float)
+    cxs = cst[1:, cv2.CC_STAT_LEFT] + cst[1:, cv2.CC_STAT_WIDTH] / 2
+    tops = cst[1:, cv2.CC_STAT_TOP].astype(float)
+    mid = (ib[0] + ib[2]) / 2
+    ok = (area >= 0.12 * area.max()) & (np.abs(cxs - mid) < 0.12 * (ib[2] - ib[0]) + 0.5 * cst[1:, cv2.CC_STAT_WIDTH])
+    cand = np.nonzero(ok)[0] if ok.any() else np.array([int(np.argmax(area))])
+    face = (lab == 1 + int(cand[np.argmin(tops[cand])])).astype(np.uint8)
     # Bao lồi, không lấp lỗ: mắt chạm tóc ở đuôi nên không thành lỗ kín — lấp lỗ bỏ sót mắt (thử r125).
     cnt, _ = cv2.findContours(face, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     hull = np.zeros_like(face)
@@ -1166,9 +1215,22 @@ def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0) -> dict:
         # Thô rồi tinh: ±8% / ±24 px bước 0,02 / 4 px, rồi ±0,01 / ±3 px quanh điểm tốt nhất.
         c = max(((score(m0, ds, dx, dy), ds, dx, dy) for ds in np.arange(0.92, 1.081, 0.02)
                  for dx in range(-24, 25, 4) for dy in range(-24, 25, 4)))
+        # Chạm biên dò thì dò lại quanh điểm đó (tối đa 3 lần): model game đầu nhỏ, ảnh front lệch tỉ lệ/dịch
+        # quá ±8% / ±24 px (fox-ear-girl-game r11: 1,09 / dy 27 ở biên, IoU 0,68 → bỏ qua chiếu mặt).
+        for _ in range(3):
+            if abs(c[1] - 1) < 0.075 and abs(c[2]) < 22 and abs(c[3]) < 22:
+                break
+            c0 = c
+            c = max(((score(m0, ds, dx, dy), ds, dx, dy) for ds in np.arange(c0[1] - 0.08, c0[1] + 0.081, 0.02)
+                     for dx in range(int(c0[2]) - 24, int(c0[2]) + 25, 4) for dy in range(int(c0[3]) - 24, int(c0[3]) + 25, 4)))
+            if c[0] <= c0[0] + 1e-4:
+                c = c0
+                break
         c = max(((score(m0, c[1] + e, c[2] + dx, c[3] + dy), c[1] + e, c[2] + dx, c[3] + dy) for e in (-0.01, 0, 0.01)
                  for dx in range(-3, 4) for dy in range(-3, 4)))
-        if best is None or c[0] > best[0]:
+        # Hoà (đầu gần đối xứng trước/sau) thì giữ −Y — hướng chuẩn của mesh Pixal3D (fox-ear-girl-game: −Y 0,967,
+        # +Y 0,968 → chiếu nhầm ra sau đầu).
+        if best is None or c[0] > best[0] + 0.03:
             best = (*c[:1], s, *c[1:], U0, V0)
     iou, s, ds, dx, dy, U0, V0 = best
     U = ds * (U0 - cx) + cx + dx
@@ -1263,6 +1325,207 @@ def face_from_ref(mesh_obj, view_path: Path, feather: float = 6.0) -> dict:
     img.update()
     img.pack()
     return {**stats, "texels": int(hit.sum()), "texelsFull": int((wsum > 0.99).sum()), "gutter": gutter}
+
+
+def rigid_head(bw, verts, joints, idx: dict[str, int], height: float, top: float = 0.005, start: float = 0.025,
+               width: float = 1.0, arm_cut: float = 0.1):
+    """Khối đầu theo Head 100%: từ Head − start·H (0%) lên tới Head + top·H (100%), trong bề ngang của đầu.
+
+    SkinTokens cho nửa dưới mặt chibi (cằm, miệng, má: dưới/ngang khớp Head) chỉ 0,3–0,6 Head, còn lại
+    Neck/Spine2 → thân nghiêng, cổ xoay là nửa dưới mặt lệch khỏi nửa trên, mặt méo (honeyview-arthur-1
+    r35). Bề ngang đầu = p80 |x − x_đầu| của dải giữa đầu (0,25–0,55 phần đầu trên cằm), nhân `width`.
+    Đỉnh có trọng số chuỗi tay (giáp vai, cổ áo lông trên vai) bỏ qua dần tới `arm_cut`: bản đầu tiên lấy
+    p95·1,1 (0,14·H) ăn sang giáp vai → giơ tay kéo giáp vai thành mảng phẳng (r55).
+    """
+    import numpy as np
+
+    head = idx["mixamorig:Head"]
+    hj = joints[head]
+    y = verts[:, 1]
+    y0, y1, ytop = float(hj[1] - start * height), float(hj[1] + top * height), float(y.max())
+    mid = (y > y1 + 0.25 * (ytop - y1)) & (y < y1 + 0.55 * (ytop - y1))
+    if mid.sum() < 50:
+        return bw, {"applied": False}
+    r = width * float(np.percentile(np.abs(verts[mid, 0] - hj[0]), 80))
+    arm_ids = [i for k, i in idx.items() if i < bw.shape[1]
+               and any(k.endswith(f"{s}{p}") for s in ("Left", "Right") for p in ("Shoulder", "Arm", "ForeArm", "Hand"))]
+    arm = bw[:, arm_ids].sum(1)
+    f = np.clip((y - y0) / max(y1 - y0, 1e-9), 0, 1) * (np.abs(verts[:, 0] - hj[0]) < r) * np.clip(1 - arm / arm_cut, 0, 1)
+    f = f * f * (3 - 2 * f)
+    before = bw[:, head].copy()
+    bw = bw * (1 - f)[:, None]
+    bw[:, head] += f
+    return bw, {"verts": int((f > 0.01).sum()), "rigid": int((f > 0.999).sum()), "radius": round(r / height, 4),
+                "headGain": round(float((bw[:, head] - before).sum() / max((f > 0.01).sum(), 1)), 4)}
+
+
+def cape_back(bw, verts, joints, tails, idx: dict[str, int], height: float, k: float = 0.045, ramp: float = 0.02):
+    """Trọng số tay -> Spine2 ở đỉnh nằm SAU xương tay (-Z, mesh canonical mặt hướng +Z) xa hơn k·H.
+
+    Áo choàng mắc trên vai nằm trong 0,12·H quanh xương cánh tay nên armFar không cắt, và SkinTokens cho nó
+    trọng số RightArm/LeftArm: vung tay chém là vạt sau vai bị kéo theo (honeyview-arthur-1 r35 Wave). Bề dày tay
+    áo + giáp vai ở sau xương ~0,035·H; trộn dần từ k đến k+ramp để không xé chỗ áo choàng nối với vai.
+    """
+    import numpy as np
+
+    spine = idx["mixamorig:Spine2"]
+    moved = np.zeros(len(verts))
+    for side in ("Left", "Right"):
+        for part in ("Shoulder", "Arm", "ForeArm", "Hand"):
+            b = idx.get(f"mixamorig:{side}{part}")
+            if b is None or b >= bw.shape[1]:
+                continue
+            a, t = joints[b], tails[b]
+            ab = t - a
+            s = np.clip(((verts - a) @ ab) / max(float(ab @ ab), 1e-12), 0, 1)
+            behind = -(verts - (a + s[:, None] * ab))[:, 2]
+            f = np.clip((behind - k * height) / max(ramp * height, 1e-9), 0, 1) * (bw[:, b] > 0)
+            take = bw[:, b] * f
+            bw[:, b] -= take
+            bw[:, spine] += take
+            moved += take
+    return bw, {"verts": int((moved > 0.01).sum()), "share": round(float(moved.sum() / max(len(verts), 1)), 4), "k": k, "ramp": ramp}
+
+
+def cloth_fix(bw, verts, faces, joints, tails, idx: dict[str, int], height: float, arm_ratio: float = 1.6,
+              leg_ratio: float = 1.4, min_part: float = 0.005, grow: float = 1.25, eps: float = 0.004, iters: int = 6,
+              legs: float = 0.3,
+              debug: str | None = None):
+    """Vải buông (áo choàng, vạt áo dài) đi theo THÂN, không theo tay/chân nằm cạnh nó.
+
+    SkinTokens/bone heat gán vạt áo choàng cạnh đùi cho UpLeg/Leg và mép áo cạnh nắm tay cho Hand: bước đi kéo
+    vạt thành dải giữa hai chân, nhảy thì áo choàng gập theo đùi (honeyview-arthur-1 r08/r10, Jump p999 > 2.6,
+    2,2% cạnh giãn > 2x). Khoảng cách tới xương thôi không tách được vạt áo SÁT sau chân (r30: tệ hơn r10).
+
+    Vải là LỚP NGOÀI: từ một đỉnh theo xương tay/chân, đường thẳng tới điểm gần nhất trên đoạn xương đó đi xuyên
+    qua một mặt khác (chính cái chân/tay) trước khi tới xương; da của chi thì nhìn thẳng thấy xương. Thêm điều
+    kiện đỉnh xa xương hơn `arm_ratio`/`leg_ratio` lần khoảng cách trung vị của các đỉnh cùng xương trội — giáp ôm
+    sát là một lớp vỏ riêng nhưng nằm trong độ dày của chi — và chỉ giữ mảng vải liền >= `min_part` số đỉnh (r31:
+    mảng giáp tay/gối lẻ tẻ bị bắt). Bàn tay/bàn chân không bao giờ là vải: ngón gập là nhiều lớp, tia nào cũng
+    bị chặn (r31: nắm tay, giày theo thân → tay lọt thân 15 khung). Đỉnh vải: trọng số chuyển (mượt `iters` vòng trên lưới) sang xương
+    thân gần nhất; dưới hông cộng phần ĐỀU của hai đùi (tới `legs`) để vạt đung đưa theo bước mà hai bên không
+    giằng nhau. `debug`: đường GLB tô đỏ các đỉnh vải.
+    """
+    import re
+
+    import numpy as np
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+
+    name = {v: k.split(":", 1)[-1] for k, v in idx.items() if v < bw.shape[1]}
+    limb = [b for b, n in name.items() if re.match(r"(Left|Right)(Arm|ForeArm|UpLeg|Leg)$", n)]
+    torso = [b for b, n in name.items() if n in ("Hips", "Spine", "Spine1", "Spine2")]
+    if not limb or not torso:
+        return bw, {"skipped": "bones"}
+    up_legs = [idx.get(f"mixamorig:{s}UpLeg") for s in ("Left", "Right")]
+    tree = BVHTree.FromPolygons([tuple(map(float, v)) for v in verts], [tuple(map(int, f)) for f in faces])
+    gap = eps * height
+
+    def closest(b, pts):
+        a, t_ = joints[b], tails[b]
+        ab = t_ - a
+        s = np.clip(((pts - a) @ ab) / max(float(ab @ ab), 1e-12), 0, 1)
+        return a + s[:, None] * ab
+
+    dom = bw.argmax(1)
+    t = np.zeros(len(verts))
+    for b in limb:
+        own = np.nonzero(dom == b)[0]
+        if len(own) < 20:
+            continue
+        c = closest(b, verts[own])
+        d = c - verts[own]
+        dist = np.linalg.norm(d, axis=1)
+        ratio = arm_ratio if "Arm" in name[b] else leg_ratio
+        far = dist > ratio * float(np.median(dist))
+        for i, k in enumerate(own):
+            if not far[i] or dist[i] < 3 * gap:
+                continue
+            u = d[i] / dist[i]
+            hit = tree.ray_cast(Vector(verts[k] + u * gap), Vector(u), float(dist[i] - 2 * gap))
+            if hit[0] is not None:
+                t[k] = 1.0
+    raw = int((t > 0).sum())
+    if raw:
+        # Mảng vải liền: áo choàng là một tấm; mảng nhỏ là giáp đè lên chi.
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+
+        # glTF tách đỉnh ở đường nối UV: hàn theo vị trí trước, không thì mảng nào cũng vụn (r32: 0 đỉnh giữ lại).
+        _, weld = np.unique(np.round(verts / (1e-5 * height)).astype(np.int64), axis=0, return_inverse=True)
+        weld = weld.ravel()
+        flag = np.zeros(weld.max() + 1, bool)
+        flag[weld[t > 0]] = True
+        e0 = weld[np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])]
+        e0 = e0[flag[e0[:, 0]] & flag[e0[:, 1]]]
+        m = len(flag)
+        g = coo_matrix((np.ones(len(e0)), (e0[:, 0], e0[:, 1])), shape=(m, m))
+        _, lab = connected_components(g, directed=False)
+        sizes = np.bincount(lab[flag], minlength=lab.max() + 1)
+        small = sizes[lab[weld]] < min_part * m
+        t[(t > 0) & small] = 0
+        # Lan ra cả tấm: từ vải đã chắc, sang đỉnh kề cũng nằm XA xương trội của nó (kể cả bàn tay/bàn chân —
+        # mép vạt cạnh nắm tay theo Hand). Một nửa tấm theo thân, nửa kia theo chân là xé ở giữa (r33: vạt ngoài
+        # không bắt được, Walk 1,5 → 2,1). Nắm tay, giày nằm sát xương nên không bị lan vào.
+        grow_b = [b for b, n in name.items() if re.match(r"(Left|Right)(Arm|ForeArm|Hand|UpLeg|Leg|Foot|ToeBase)$", n)]
+        rel = np.zeros(len(verts))
+        for b in grow_b:
+            own = np.nonzero(dom == b)[0]
+            if len(own) < 20:
+                continue
+            dist = np.linalg.norm(closest(b, verts[own]) - verts[own], axis=1)
+            rel[own] = dist / max(float(np.median(dist)), 1e-6)
+        relw = np.zeros(m)
+        np.maximum.at(relw, weld, rel)
+        seed = np.zeros(m, bool)
+        seed[weld[t > 0]] = True
+        ew = weld[np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])]
+        ok = relw > grow
+        for _ in range(400):
+            nxt = seed.copy()
+            nxt[ew[seed[ew[:, 0]] & ok[ew[:, 1]], 1]] = True
+            nxt[ew[seed[ew[:, 1]] & ok[ew[:, 0]], 0]] = True
+            if nxt.sum() == seed.sum():
+                break
+            seed = nxt
+        t = np.maximum(t, seed[weld].astype(float))
+    if iters and t.any():
+        n = len(verts)
+        e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+        deg = np.bincount(e.ravel(), minlength=n).astype(float)
+        for _ in range(iters):
+            acc = np.bincount(e[:, 0], weights=t[e[:, 1]], minlength=n) + np.bincount(e[:, 1], weights=t[e[:, 0]], minlength=n)
+            t = np.maximum(t, 0.5 * t + 0.5 * acc / np.maximum(deg, 1))
+    cloth = t > 1e-3
+    if debug:
+        import trimesh
+
+        col = np.tile(np.array([[200, 200, 200, 255]], np.uint8), (len(verts), 1))
+        col[cloth, 0] = 255
+        col[cloth, 1] = (200 * (1 - t[cloth])).astype(np.uint8)
+        col[cloth, 2] = (200 * (1 - t[cloth])).astype(np.uint8)
+        trimesh.Trimesh(verts, faces, vertex_colors=col, process=False).export(debug)
+    if not cloth.any():
+        return bw, {"verts": 0}
+    vc = verts[cloth]
+    dt = np.stack([np.linalg.norm(vc - closest(b, vc), axis=1) for b in torso], 1)
+    wt = 1 / np.maximum(dt, 1e-6) ** 2
+    np.put_along_axis(wt, np.argsort(dt, 1)[:, 2:], 0, 1)
+    wt /= wt.sum(1, keepdims=True)
+    target = np.zeros((int(cloth.sum()), bw.shape[1]), dtype=np.float64)
+    target[:, torso] = wt
+    hips = idx.get("mixamorig:Hips")
+    if hips is not None and all(u is not None for u in up_legs):
+        below = np.clip((joints[hips][1] - vc[:, 1]) / (0.25 * height), 0, 1) * legs
+        target *= (1 - below)[:, None]
+        for u in up_legs:
+            target[:, u] += below / 2
+    tc = t[cloth][:, None]
+    out = bw.astype(np.float64).copy()
+    out[cloth] = (1 - tc) * out[cloth] + tc * target
+    out /= out.sum(1, keepdims=True)
+    return out.astype(bw.dtype), {"verts": int(cloth.sum()), "occluded": raw, "kept": int((t > 0.99).sum()),
+                                  "share": round(float(cloth.mean()), 4)}
 
 
 def limb_weight_fix(bw, idx: dict[str, int]):
@@ -1393,7 +1656,16 @@ def main() -> int:
     seed = int(job.get("seed", 0) or 0)
     arm_space_deg = float(job.get("armSpace", 30) or 0)
     torso_clear = job.get("torsoClear", True) is not False
+    cloth_opts = job.get("clothFix") or False
+    cloth_opts = {} if cloth_opts is True else cloth_opts
+    rigid_head_opts = job.get("rigidHead", False)
+    rigid_head_opts = {} if rigid_head_opts is True else rigid_head_opts if isinstance(rigid_head_opts, dict) else False
+    cape_k = job.get("capeBack") or 0
+    cape_k = ({"k": 0.045} if cape_k is True else cape_k if isinstance(cape_k, dict) else {"k": float(cape_k)}) if cape_k else False
     knee_up = float(job.get("kneeRaise") or 0)
+    # Mặc định BẬT: chỉ sửa khi tỉ lệ bắp tay / cẳng tay ra ngoài khoảng — xem `elbow_fix`. false = tắt; số = frac; dict = tham số.
+    elbow_opts = job.get("elbowFix", True)
+    elbow_opts = {} if elbow_opts is True else {"frac": float(elbow_opts)} if isinstance(elbow_opts, (int, float)) and not isinstance(elbow_opts, bool) else elbow_opts
     sleeve_fix = job.get("sleeveSkinFix") or 0
     sleeve_fix = 0.032 if sleeve_fix is True else float(sleeve_fix)
     face_ref = bool(job.get("faceFromRef"))
@@ -1594,6 +1866,9 @@ def main() -> int:
         knee_stats = knee_raise(db, dict(A.BONES_IDX_DICT), knee_up) if knee_up else False
         if knee_up:
             log(f"knee raise: {knee_stats}")
+        elbow_stats = elbow_fix(db, dict(A.BONES_IDX_DICT), **elbow_opts) if isinstance(elbow_opts, dict) else False
+        if elbow_stats:
+            log(f"elbow fix: {elbow_stats}")
         if weights_mode == "heat":
             with ph("heat-weights"):
                 idx = dict(A.BONES_IDX_DICT)
@@ -1745,6 +2020,13 @@ def main() -> int:
                     bwd[rows, b] = 0
                     bwd[rows] /= bwd[rows].sum(1, keepdims=True)
                 wf_stats["armFar"] = {"weightsCut": cut}
+                if rigid_head_opts is not False:
+                    bwd, wf_stats["rigidHead"] = rigid_head(bwd, Vd, jn, idx, hhv, **rigid_head_opts)
+                if cape_k:
+                    bwd, wf_stats["capeBack"] = cape_back(bwd, Vd, jn, jt, idx, hhv, **cape_k)
+                if cloth_opts is not False:
+                    bwd, wf_stats["clothFix"] = cloth_fix(bwd, Vd, np.asarray(display["mesh"].faces), jn, jt, idx, hhv,
+                                                          debug=str(out / "cloth.glb"), **cloth_opts)
                 if weight_fix:
                     # Chép 4 đỉnh gần nhất có thể trộn lại hai chuỗi ở chỗ hai phần nằm sát nhau — lọc lần nữa.
                     bwd, wf_stats["limbAfterTransfer"] = limb_weight_fix(bwd, dict(A.BONES_IDX_DICT))
@@ -1817,7 +2099,28 @@ def main() -> int:
         sleeve_stats = sleeve_skin_fix(arm_obj, mesh_obj, float(sleeve_fix)) if sleeve_fix else False
         if sleeve_fix:
             log(f"sleeve skin fix: {sleeve_stats}")
-        face_stats = face_from_ref(mesh_obj, src.parent / "mesh_views" / "front.png") if face_ref else False
+        front_view = src.parent / "mesh_views" / "front.png"
+        if face_ref and not front_view.is_file():
+            # Lượt `retexture` không có mesh_views riêng: hình khối là của lượt nguồn, ảnh front ở đó.
+            try:
+                rx = json.loads((src.parent / "run.json").read_text(encoding="utf-8")).get("config", {}).get("retexture")
+                if rx:
+                    front_view = src.parent.parent / str(rx) / "mesh_views" / "front.png"
+            except Exception:
+                pass
+        face_stats = face_from_ref(mesh_obj, front_view) if face_ref else False
+        if face_ref and "silhouette" in str((face_stats or {}).get("skipped", "")):
+            # Cảnh rig đã chuẩn hoá + đưa mesh về tư thế chữ T: bóng đầu lệch ảnh front (fox-ear-girl-game r11/r12:
+            # IoU 0,73, tỉ lệ 1,25 ở biên dò) trong khi mesh gốc khớp 0,97. Căn trên mesh gốc (cùng UV), tô vào
+            # ảnh của mesh rig.
+            before = set(bpy.data.objects)
+            bpy.ops.import_scene.gltf(filepath=str(src))
+            new_objs = [o for o in bpy.data.objects if o not in before]
+            geo = max((o for o in new_objs if o.type == "MESH"), key=lambda o: len(o.data.vertices), default=None)
+            if geo is not None and len(geo.data.loops) == len(mesh_obj.data.loops):
+                face_stats = {**face_from_ref(mesh_obj, front_view, geom=geo), "geom": "source mesh"}
+            for o in new_objs:
+                bpy.data.objects.remove(o, do_unlink=True)
         if face_ref:
             log(f"face from ref: {face_stats}")
         bpy.ops.export_scene.gltf(filepath=str(out / "rest.glb"), check_existing=False, use_selection=False,
@@ -1898,7 +2201,7 @@ def main() -> int:
         joints = {b.name: [round(x, 4) for x in (arm_obj.matrix_world @ b.head_local)] for b in arm_obj.data.bones}
         info = {"bones": bones_n, "clips": clips, "restPose": rest_pose, "armRollFixed": roll_fixed, "noFingers": no_fingers, "retarget": retarget,
                 "inplace": inplace, "canonical": canonical, "weights": weights_mode, "prep": prep_stats, "weightFix": wf_stats if (weight_fix or weights_mode == "heat") else False,
-                "headShrink": shrink_info, "predFrom": str(pred_from) if pred_from else None, "armSpace": arm_space_stats or False, "torsoClear": torso_stats or False, "sleeveSkinFix": sleeve_stats, "faceFromRef": face_stats, "kneeRaise": knee_stats, "windingFlipped": flipped["faces"], "aoStripped": ao_stripped, "normalAttached": normal_attached, "verts": len(mesh_obj.data.vertices), "joints": joints, "peakVramMiB": peak,
+                "headShrink": shrink_info, "predFrom": str(pred_from) if pred_from else None, "armSpace": arm_space_stats or False, "torsoClear": torso_stats or False, "clothFix": wf_stats.get("clothFix", False), "capeBack": wf_stats.get("capeBack", False), "sleeveSkinFix": sleeve_stats, "faceFromRef": face_stats, "kneeRaise": knee_stats, "elbowFix": elbow_stats, "windingFlipped": flipped["faces"], "aoStripped": ao_stripped, "normalAttached": normal_attached, "verts": len(mesh_obj.data.vertices), "joints": joints, "peakVramMiB": peak,
                 "phaseMs": ph.ms, "seed": seed, "miaCommit": rt.get("commit")}
         (out / "info.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
         # Sản phẩm phụ của MIA (que xương, trọng số) — để soát vị trí khớp.

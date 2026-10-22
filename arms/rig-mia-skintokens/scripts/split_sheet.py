@@ -10,8 +10,15 @@ Mỗi góc dán vào canvas vuông nền trắng, GIỮ vị trí dọc (đỉnh
 Khớp chéo (docs/char3d.md "Flow chuẩn"): bề ngang front vs back lệch ≤ 5%, chiều cao ba góc lệch ≤ 3%. Sheet lệch
 hơn thì tay/thân hai góc không cùng dáng → mesh hỏng tay áo, bàn tay (log r192).
 
+Tư thế tay (`check.pose`, front và back): `handY` = dòng có bề ngang lớn nhất trong 15-75% chiều cao (nắm tay),
+tính từ đỉnh tóc theo phần chiều cao; `span` = bề ngang đó / chiều cao. A-pose ~45° chibi: handY 0.565-0.587
+(chibi-martial-girl r03/r20/r26/r40, rig tốt); tay buông 0.61-0.75 (honeyview-arthur-1 r04/r05, áo choàng dính
+tay); gần chữ T 0.31 (r12). Model thị giác 8B không đo được góc này (r05 và r12 đều 10/10).
+`gapRows` = phần chiều cao (trong 30-80%) mà một dòng cắt hình thành >= 3 đoạn rời: có khe trắng giữa tay và
+thân/áo choàng. Cô gái 0.21-0.41 (rig tốt), Arthur tay buông sát áo choàng 0.06-0.16 (rig xé áo choàng).
+
 Đầu ra (`done`): sets: [{index, sheet, views: {front, left, back} | null, check: {segments, widths, heights,
-widthDiff, heightDiff, ok}}]
+widthDiff, heightDiff, ok, pose: {front: {handY, span}, back: {handY, span}}}}]
 """
 
 from __future__ import annotations
@@ -45,6 +52,24 @@ def emit(event: str, **kw) -> None:
     _PROTO.flush()
 
 
+def arm_span(fg: np.ndarray) -> dict:
+    """Where the figure is widest between 15 % and 75 % of its height: the fists, in an A-pose."""
+    rows = np.nonzero(fg.sum(1) > 0)[0]
+    top, bot = int(rows.min()), int(rows.max())
+    h = max(1, bot - top)
+    best, at = -1, top
+    for y in range(int(top + 0.15 * h), int(top + 0.75 * h)):
+        xs = np.nonzero(fg[y])[0]
+        if len(xs) and xs.max() - xs.min() > best:
+            best, at = int(xs.max() - xs.min()), y
+    gap_rows = 0
+    for y in range(int(top + 0.3 * h), int(top + 0.8 * h)):
+        xs = np.nonzero(fg[y])[0]
+        if len(xs) and 1 + int((np.diff(xs) > 6).sum()) >= 3:
+            gap_rows += 1
+    return {"handY": round((at - top) / h, 3), "span": round(best / h, 3), "gapRows": round(gap_rows / h, 3)}
+
+
 def split(path: str, out_dir: Path, index: int) -> dict:
     im = Image.open(path).convert("RGB")
     a = np.asarray(im).astype(int)
@@ -69,9 +94,11 @@ def split(path: str, out_dir: Path, index: int) -> dict:
     check: dict = {"segments": len(merged), "ok": False}
     if len(merged) != 3:
         return {"index": index, "sheet": path, "views": None, "check": check}
-    widths, heights, views = [], [], {}
+    widths, heights, views, pose = [], [], {}, {}
     for name, (s, e) in zip(VIEWS, merged):
         rows = np.nonzero(fg[:, s:e].sum(1) > 0)[0]
+        if name != "left":
+            pose[name] = arm_span(fg[:, s:e])
         widths.append(e - s)
         heights.append(int(rows.max() - rows.min()))
         pad = 60
@@ -85,7 +112,7 @@ def split(path: str, out_dir: Path, index: int) -> dict:
     wd = abs(widths[0] - widths[2]) / max(widths[0], widths[2])
     hd = (max(heights) - min(heights)) / max(heights)
     check.update({"widths": widths, "heights": heights, "widthDiff": round(wd, 4), "heightDiff": round(hd, 4),
-                  "ok": bool(wd <= WIDTH_TOL and hd <= HEIGHT_TOL)})
+                  "ok": bool(wd <= WIDTH_TOL and hd <= HEIGHT_TOL), "pose": pose})
     return {"index": index, "sheet": path, "views": views, "check": check}
 
 

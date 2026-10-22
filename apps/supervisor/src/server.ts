@@ -134,6 +134,20 @@ async function pullArmProgress(parts: ControlServerParts, armId: string, jobId: 
   }
 }
 
+/** The exclusive card, one job at a time from acquire to the arm's answer (per manager). */
+const gpuLeases = new WeakMap<object, Promise<void>>();
+
+async function leaseGpu(owner: object): Promise<() => void> {
+  const previous = gpuLeases.get(owner) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  gpuLeases.set(owner, previous.then(() => held));
+  await previous;
+  return release;
+}
+
 async function handle(
   request: IncomingMessage,
   response: ServerResponse,
@@ -204,7 +218,14 @@ async function handle(
       }
 
       jobs.open(jobId, armId);
+      // An exclusive arm holds the card from acquire until it answers. Acquire
+      // alone is serialised, but a second job for another arm used to evict
+      // this one mid-generation: the arm's process died under it (connection
+      // reset) or its memory was not back yet when the next one loaded (CUDA
+      // out of memory) -- char3d runs of several characters at once, 2026-10-22.
+      let release: () => void = () => {};
       try {
+        if (manager.summary(armId).gpu === 'exclusive') release = await leaseGpu(manager);
         // The caller never starts an arm. Whatever is on the card now is this
         // call's problem, and each thing it does is reported as it does it.
         await manager.acquire(armId, params, {
@@ -213,42 +234,46 @@ async function handle(
         });
         jobs.acquired(jobId);
       } catch (error) {
+        release();
         jobs.fail(jobId, (error as Error).message);
         throw error;
       }
-
-      let armResponse: Response;
       try {
-        armResponse = await fetch(`${manager.endpoint(armId)}/generate`, {
-          // The arm answers when the job is finished, not when it is accepted,
-          // so this call outlasts Node's own five-minute response ceiling.
-          ...patientFetchInit(),
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...job, jobId }),
-        });
-      } catch (error) {
-        const message = `arm "${armId}" did not answer (${(error as Error).message})`;
-        jobs.fail(jobId, message);
-        throw new ArmControlError('arm_error', message);
+        let armResponse: Response;
+        try {
+          armResponse = await fetch(`${manager.endpoint(armId)}/generate`, {
+            // The arm answers when the job is finished, not when it is accepted,
+            // so this call outlasts Node's own five-minute response ceiling.
+            ...patientFetchInit(),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...job, jobId }),
+          });
+        } catch (error) {
+          const message = `arm "${armId}" did not answer (${(error as Error).message})`;
+          jobs.fail(jobId, message);
+          throw new ArmControlError('arm_error', message);
+        }
+
+        const text = await armResponse.text();
+        const body: unknown = text ? JSON.parse(text) : {};
+
+        // One last pull before the job closes, so the finished timeline is the
+        // arm's own final state rather than whatever the last poll happened to see.
+        await pullArmProgress(parts, armId, jobId);
+
+        if (!armResponse.ok) {
+          const detail = body as { error?: { message?: string }; message?: string };
+          const message = detail.error?.message ?? detail.message ?? `arm responded ${armResponse.status}`;
+          jobs.fail(jobId, message);
+          throw new ArmControlError(armResponse.status === 400 ? 'invalid_request' : 'arm_error', message);
+        }
+
+        jobs.done(jobId);
+        send(response, 200, body);
+      } finally {
+        release();
       }
-
-      const text = await armResponse.text();
-      const body: unknown = text ? JSON.parse(text) : {};
-
-      // One last pull before the job closes, so the finished timeline is the
-      // arm's own final state rather than whatever the last poll happened to see.
-      await pullArmProgress(parts, armId, jobId);
-
-      if (!armResponse.ok) {
-        const detail = body as { error?: { message?: string }; message?: string };
-        const message = detail.error?.message ?? detail.message ?? `arm responded ${armResponse.status}`;
-        jobs.fail(jobId, message);
-        throw new ArmControlError(armResponse.status === 400 ? 'invalid_request' : 'arm_error', message);
-      }
-
-      jobs.done(jobId);
-      send(response, 200, body);
       return;
     }
 
